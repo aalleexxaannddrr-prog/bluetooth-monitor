@@ -2,10 +2,8 @@ package fr.mossaab.security.service;
 
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import fr.mossaab.security.entities.FileData;
 import fr.mossaab.security.enums.Role;
 import fr.mossaab.security.enums.TokenType;
-import fr.mossaab.security.repository.FileDataRepository;
 import fr.mossaab.security.entities.User;
 import fr.mossaab.security.repository.UserRepository;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -36,50 +34,23 @@ import java.util.*;
 @Transactional
 @RequiredArgsConstructor
 public class AuthenticationService {
-    private final FileDataRepository fileDataRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final UserRepository userRepository;
     private final AuthenticationManager authenticationManager;
     private final RefreshTokenService refreshTokenService;
-    private final MailSender mailSender;
-    private final StorageService storageService;
     private static final Logger logger = LoggerFactory.getLogger(AuthenticationService.class);
 
     public AuthenticationResponse register(RegisterRequest request)  {
         // Проверка существования пользователя с таким же email и activationCode == null
         var existingUserByEmail = userRepository.findByEmail(request.getEmail());
-        if (existingUserByEmail.isPresent() && existingUserByEmail.get().getActivationCode() == null) {
-            throw new IllegalArgumentException("Пользователь с таким email уже существует и активирован.");
-        }
-        var existingUserByNickname = userRepository.findByNickname(request.getNickname());
-        if (existingUserByNickname.isPresent() && existingUserByNickname.get().getActivationCode() == null) {
-            throw new IllegalArgumentException("Пользователь с таким никнеймом уже существует и активирован.");
-        }
 
         //public AuthenticationResponse register(RegisterRequest request, MultipartFile image) throws IOException {
         var user = User.builder()
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
                 .role(Role.USER)
-                .pears(0)
-                .points(0)
-                .temporarySecondsBalance(0)
-                .tempEmail(null)
-                .nickname(request.getNickname())
                 .build();
-        String activationCode = UUID.randomUUID().toString();
-        user.setActivationCode(activationCode);
-        if (!StringUtils.isEmpty(user.getEmail())) {
-            String message = String.format(
-                    "Здравствуйте, %s! \n" +
-                            "Добро пожаловать в GоMind. Ваша ссылка для активации: http://158.160.138.117:8080/authentication/activate/%s",
-                    user.getUsername(),
-                    user.getActivationCode()
-            );
-
-            mailSender.send(user.getEmail(), "Ссылка активации GоMind", message);
-        }
         user = userRepository.save(user);
         var jwt = jwtService.generateToken(user);
         var refreshToken = refreshTokenService.createRefreshToken(user.getId());
@@ -88,8 +59,6 @@ public class AuthenticationService {
                 .stream()
                 .map(SimpleGrantedAuthority::getAuthority)
                 .toList();
-//        FileData uploadImage = (FileData) storageService.uploadImageToFileSystem(image,user);
-//        fileDataRepository.save(uploadImage);
         return AuthenticationResponse.builder()
                 .accessToken(jwt)
                 .email(user.getEmail())
@@ -100,26 +69,6 @@ public class AuthenticationService {
                 .build();
     }
 
-    public void requestPasswordReset(String email) {
-        Optional<User> userOptional = userRepository.findByEmail(email);
-        if (userOptional.isEmpty()) {
-            throw new UsernameNotFoundException("Пользователь с email " + email + " не найден");
-        }
-
-        User user = userOptional.get();
-        String activationCode = UUID.randomUUID().toString(); // Генерация нового кода
-        user.setActivationCode(activationCode);
-        userRepository.save(user);
-
-        String message = String.format(
-                "Здравствуйте, %s! \n" +
-                        "Ваша ссылка для смены пароля: http://158.160.138.117:8080/authentication/activate/%s",
-                user.getUsername(),
-                user.getActivationCode()
-        );
-
-        mailSender.send(user.getEmail(), "Код смены пароля в GоMind", message);
-    }
     public ResponseEntity<Void> refreshTokenUsingCookie(HttpServletRequest request) {
         String refreshToken = refreshTokenService.getRefreshTokenFromCookies(request);
         RefreshTokenResponse refreshTokenResponse = refreshTokenService
@@ -129,18 +78,7 @@ public class AuthenticationService {
                 .header(HttpHeaders.SET_COOKIE, newJwtCookie.toString())
                 .build();
     }
-    public ResponseEntity<Object> resetPassword(ResetPasswordRequest request) {
-        User user = userRepository.findByActivationCode(request.getCode());
-        if (user == null) {
-            return new ResponseEntity<>("Код активации не найден", HttpStatus.BAD_REQUEST);
-        }
 
-        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
-        user.setActivationCode(null); // Удаление использованного кода
-        userRepository.save(user);
-
-        return new ResponseEntity<>("Пароль успешно изменен", HttpStatus.OK);
-    }
     public ResponseEntity<Void> logout(HttpServletRequest request) {
         String refreshToken = refreshTokenService.getRefreshTokenFromCookies(request);
         if (refreshToken != null) {
@@ -154,23 +92,6 @@ public class AuthenticationService {
                 .build();
     }
 
-    public void  resendActivationCode(String email) throws ParseException {
-        Optional<User> userOptional = userRepository.findByEmail(email);
-        User user = userOptional.get();
-        String activationCode = UUID.randomUUID().toString();
-        user.setActivationCode(activationCode);
-        if (!StringUtils.isEmpty(user.getEmail())) {
-            String message = String.format(
-                    "Здравствуйте, %s! \n" +
-                            "Добро пожаловать в GоMind. Ваш ссылка активации: http://158.160.138.117:8080/authentication/activate/%s",
-                    user.getUsername(),
-                    user.getActivationCode()
-            );
-
-            mailSender.send(user.getEmail(), "Ссылка активации GоMind", message);
-        }
-        userRepository.save(user);
-    }
 
     /**
      * Аутентифицирует пользователя.
@@ -206,20 +127,6 @@ public class AuthenticationService {
                 .build();
     }
 
-    public synchronized boolean activateUser(String code) {
-        User userEntity = userRepository.findByActivationCode(code);
-        if (userEntity == null) {
-            throw new NullPointerException("Пользователь с таким кодом активации не найден ");
-        }
-        if (Objects.equals(code, userEntity.getActivationCode())) {
-            userEntity.setActivationCode(null);
-            userRepository.save(userEntity);
-            return true;
-        } else {
-            throw new NullPointerException("Введенный код не совпадает с истинным");
-        }
-    }
-
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
@@ -230,27 +137,6 @@ public class AuthenticationService {
          */
         private String refreshToken;
 
-    }
-    @Getter
-    @Setter
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class ActivateResponse {
-        private String status;
-        private String notify;
-        private String answer;
-        private ErrorActivateDto errors;
-
-        // Геттеры и сеттеры
-    }
-    @Getter
-    @Setter
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class ErrorActivateDto {
-        private String code;
-
-        // Геттеры и сеттеры
     }
 
     @Data

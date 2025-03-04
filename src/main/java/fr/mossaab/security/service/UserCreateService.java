@@ -30,16 +30,10 @@ public class UserCreateService {
         try {
 
             User user = User.builder()
-                    .temporarySecondsBalance(0)
-                    .tempEmail(null)
-                    .nickname("Vlad72229@yandex.ru")
-                    .pears(300)
-                    .points(0)
                     .id(id) // Предполагается, что id уже задан
                     .email(email)
                     .password(password) // Пароль уже зашифрован
                     .role(role)
-                    .activationCode(activationCode)
                     .build();
             logger.debug("User create: ", role);
             logger.debug("User create: ", user.getRole());
