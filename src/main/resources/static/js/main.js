@@ -11,14 +11,21 @@ const logout = document.querySelector('#logout');
 
 let stompClient = null;
 let nickname = null;
-let fullname = null;
 let selectedUserId = null;
+
+// Обработчик для отправки сообщения при нажатии Enter (без Shift)
+// Если Shift+Enter – вставляется перенос строки
+messageInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage(e);
+    }
+});
 
 function connect(event) {
     nickname = document.querySelector('#nickname').value.trim();
-    fullname = document.querySelector('#fullname').value.trim();
 
-    if (nickname && fullname) {
+    if (nickname) {
         usernamePage.classList.add('hidden');
         chatPage.classList.remove('hidden');
 
@@ -30,17 +37,16 @@ function connect(event) {
     event.preventDefault();
 }
 
-
 function onConnected() {
     stompClient.subscribe(`/user/${nickname}/queue/messages`, onMessageReceived);
     stompClient.subscribe(`/user/public`, onMessageReceived);
 
-    // register the connected user
+    // Регистрируем подключившегося пользователя, передаём только nickName
     stompClient.send("/app/user.addUser",
         {},
-        JSON.stringify({nickName: nickname, fullName: fullname, status: 'ONLINE'})
+        JSON.stringify({nickName: nickname, status: 'ONLINE'})
     );
-    document.querySelector('#connected-user-fullname').textContent = fullname;
+    document.querySelector('#connected-user-nickname').textContent = nickname;
     findAndDisplayConnectedUsers().then();
 }
 
@@ -68,10 +74,10 @@ function appendUserElement(user, connectedUsersList) {
 
     const userImage = document.createElement('img');
     userImage.src = '../img/user_icon.png';
-    userImage.alt = user.fullName;
+    userImage.alt = user.nickName;
 
     const usernameSpan = document.createElement('span');
-    usernameSpan.textContent = user.fullName;
+    usernameSpan.textContent = user.nickName;
 
     const receivedMsgs = document.createElement('span');
     receivedMsgs.textContent = '0';
@@ -101,7 +107,6 @@ function userItemClick(event) {
     const nbrMsg = clickedUser.querySelector('.nbr-msg');
     nbrMsg.classList.add('hidden');
     nbrMsg.textContent = '0';
-
 }
 
 function displayMessage(senderId, content) {
@@ -128,12 +133,10 @@ async function fetchAndDisplayUserChat() {
     chatArea.scrollTop = chatArea.scrollHeight;
 }
 
-
 function onError() {
     connectingElement.textContent = 'Could not connect to WebSocket server. Please refresh this page to try again!';
     connectingElement.style.color = 'red';
 }
-
 
 function sendMessage(event) {
     const messageContent = messageInput.value.trim();
@@ -141,17 +144,16 @@ function sendMessage(event) {
         const chatMessage = {
             senderId: nickname,
             recipientId: selectedUserId,
-            content: messageInput.value.trim(),
+            content: messageInput.value,  // сохраняем переносы строк
             timestamp: new Date()
         };
         stompClient.send("/app/chat", {}, JSON.stringify(chatMessage));
-        displayMessage(nickname, messageInput.value.trim());
+        displayMessage(nickname, messageInput.value);
         messageInput.value = '';
     }
     chatArea.scrollTop = chatArea.scrollHeight;
     event.preventDefault();
 }
-
 
 async function onMessageReceived(payload) {
     await findAndDisplayConnectedUsers();
@@ -179,12 +181,12 @@ async function onMessageReceived(payload) {
 function onLogout() {
     stompClient.send("/app/user.disconnectUser",
         {},
-        JSON.stringify({nickName: nickname, fullName: fullname, status: 'OFFLINE'})
+        JSON.stringify({nickName: nickname, status: 'OFFLINE'})
     );
     window.location.reload();
 }
 
-usernameForm.addEventListener('submit', connect, true); // step 1
+usernameForm.addEventListener('submit', connect, true);
 messageForm.addEventListener('submit', sendMessage, true);
 logout.addEventListener('click', onLogout, true);
 window.onbeforeunload = () => onLogout();

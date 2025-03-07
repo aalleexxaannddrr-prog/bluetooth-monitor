@@ -1,16 +1,21 @@
 package com.alibou.websocket.user;
 
+import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.mapping.Document;
 
 @Getter
 @Setter
-@Document
+@Entity
+@Table(name = "users")
 public class User {
     @Id
     private String nickName;
-    private String fullName;
+
+    @Enumerated(EnumType.STRING)
     private Status status;
+
+    @Enumerated(EnumType.STRING)
+    private UserRole role;
 }
+

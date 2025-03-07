@@ -1,24 +1,30 @@
 package com.alibou.websocket.chat;
 
+import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.mapping.Document;
 import java.util.Date;
 
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
 @Builder
-@Document
+@Entity
+@Table(name = "chat_message")
 public class ChatMessage {
     @Id
-    private String id;
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
     private String chatId;
     private String senderId;
     private String recipientId;
+
+    @Column(columnDefinition = "TEXT")
     private String content;
+
+    @Temporal(TemporalType.TIMESTAMP)
     private Date timestamp;
 }

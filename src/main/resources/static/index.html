@@ -8,31 +8,27 @@
 </head>
 <body>
 
-<h2>One to One Chat | Spring boot & Websocket | By Alibou</h2>
+<h2>Двухсторонняя синхронная передача данных</h2>
 
 <div class="user-form" id="username-page">
-    <h2>Enter Chatroom</h2>
+    <h2>Вход</h2>
     <form id="usernameForm">
-        <label for="nickname">Nickname:</label>
+        <label for="nickname">Номер телефона:</label>
         <input type="text" id="nickname" name="nickname" required>
-
-        <label for="fullname">Real Name:</label>
-        <input type="text" id="fullname" name="realname" required>
-
-        <button type="submit">Enter Chatroom</button>
+        <button type="submit">Войти</button>
     </form>
 </div>
 
 <div class="chat-container hidden" id="chat-page">
     <div class="users-list">
         <div class="users-list-container">
-            <h2>Online Users</h2>
+            <h2>Пользователи онлайн</h2>
             <ul id="connectedUsers">
             </ul>
         </div>
         <div>
-            <p id="connected-user-fullname"></p>
-            <a class="logout" href="javascript:void(0)" id="logout">Logout</a>
+            <p id="connected-user-nickname"></p>
+            <a class="logout" href="javascript:void(0)" id="logout">Выйти</a>
         </div>
     </div>
 
@@ -42,8 +38,8 @@
 
         <form id="messageForm" name="messageForm" class="hidden">
             <div class="message-input">
-                <input autocomplete="off" type="text" id="message" placeholder="Type your message...">
-                <button>Send</button>
+                <textarea autocomplete="off" id="message" placeholder="Type your message..." rows="3"></textarea>
+                <button type="submit">Отправить</button>
             </div>
         </form>
     </div>
