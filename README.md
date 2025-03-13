@@ -1,77 +1,177 @@
-# Project Name
+```markdown
+# Bluetooth Monitor
 
-One On One Chat application | Spring boot & WebSocket | By Alibou
+Пример веб-приложения на WebSocket (SockJS + STOMP) для обмена сообщениями между инженерами и клиентами в реальном времени.
 
-## Overview
+- **Frontend** — HTML/JS (одностраничное приложение: `index.html` и `main.js`).
+- **Backend** — Spring Boot-приложение (WebSocket-эндпоинты, REST для пользователей и сообщений).
+- **Docker** — контейнер для развёртывания.
 
-Explore the world of **WebSockets** with **Alibou**, your experienced software engineer guide. If you missed our previous session delving into the magic of WebSockets and creating a lively group chat application, catch up [here](https://www.youtube.com/watch?v=7T-HnTE6v64&ab_channel=BoualiAli).
+Данное приложение реализует чат **инженера** с **клиентом (regular user)**, включая хранение сообщений и список пользователей (онлайн/оффлайн).
 
-Today's focus is on real-time communication, as we build a **one-on-one chat application** that ensures private, secure conversations. Taking it a step further, we'll persist these chats in a **MongoDB database**.
+## 1. Сборка и запуск
 
-Before diving into the code, a special mention for those keen on deepening their understanding of WebSockets. If you haven't checked out the introduction in the previous video, find the link in the description [here](https://www.youtube.com/watch?v=TywlS9iAZCM&t=808s&ab_channel=BoualiAli).
+### 1.1 Через Docker
 
-🔔 If you're not part of our community yet, consider hitting that star button! Stay tuned for weekly releases of engaging content where we explore, learn, and code together.
-
-👨‍💻 I'm Alibou, excited to guide you through today's exploration. Let's embark on this coding adventure together, building a one-on-one chat application, uncovering WebSockets intricacies, and mastering the art of data persistence in MongoDB.
-
----
-
-#### Here is a demo of the application
-
-![Future application](./app-preview.png)
-
-#### Full Tutorial link
-
-[Watch the Tutorial](https://www.youtube.com/watch?v=7T-HnTE6v64&ab_channel=BoualiAli)
-
-
-
-## Table of Contents
-
-- [Features](#features)
-- [Installation](#installation)
-- [Technologies](#technologies)
-
-## Features
-
-- One to one chat application
-- Secure communication
-- Persistent chat
-
-![WebSocket Chat Flow](./one_to_one_comm.png)
+1. Убедитесь, что установлены Docker и Docker Compose.
+2. В корне проекта выполните:
+   ```bash
+   docker-compose down
+   docker-compose build --no-cache
+   docker-compose up -d
+   ```
+3. Приложение будет доступно по адресу `http://<IP_сервера>:8080`
 
 ---
 
-![WebSocket Chat Flow](./websocket_chat_flow.png)
+### 1.2 Без Docker (опционально)
+
+1. Соберите Spring Boot-приложение (Maven или Gradle), получив jar-файл (например, `bluetooth-monitor.jar`).
+2. Запустите его:
+   ```bash
+   java -jar target/bluetooth-monitor.jar
+   ```
+3. Перейдите по адресу:
+   ```
+   http://localhost:8080
+   ```
 
 ---
 
-## Installation
+## Использование в Android
 
-Provide step-by-step instructions on how to install and set up your project locally.
+Чтобы интегрировать это приложение в ваше Android-приложение, необходима работа как с **REST API**, так и с **WebSocket (SockJS + STOMP)**.
 
-```bash
-# Clone the repository
-git clone https://github.com/ali-bouali/one-to-one-chat-spring-boot-web-socket
+### 1. REST API
 
-# Change into the project directory
-cd your-project
+REST-эндпоинты используются для:
+- Загрузки списка пользователей (эндпоинт: `GET /users`).
+- Получения истории сообщений (эндпоинт: `GET /messages/{from}/{to}`).
 
-# Build the project
-./mvnw clean install
+#### 1.1 Получение списка пользователей
+
+```kotlin
+// Пример с Retrofit (упрощён)
+val users = api.getUsers() // GET /users
+// users: List<User>
+```
+
+Возвращаемый JSON может выглядеть так:
+```json
+[
+  {
+    "nickName": "engineer1",
+    "role": "ENGINEER",
+    "status": "ONLINE"
+  },
+  {
+    "nickName": "user123",
+    "role": "REGULAR",
+    "status": "OFFLINE"
+  }
+]
+```
+
+#### 1.2 Получение истории сообщений
+
+```kotlin
+// Пример с Retrofit (упрощён)
+val messages = api.getMessages("myNickname", "selectedUser") // GET /messages/{from}/{to}
+// messages: List<ChatMessage>
+```
+
+Пример ответа:
+```json
+[
+  {
+    "id": 1,
+    "senderId": "user123",
+    "recipientId": "engineer1",
+    "content": "Hello, I need help!",
+    "timestamp": "2025-03-13T15:00:00Z"
+  }
+]
 ```
 
 ---
-## Technologies
 
-This project is mainly implement using the following technologies
+### 2. WebSocket (SockJS + STOMP)
 
-- Websocket
-- Spring Boot 3.x.x
-- MongoDB
-- Javascript
-- HTML
-- CSS
+Для обмена сообщениями в **реальном времени** используется WebSocket.
+
+1. **Подключение** к `ws://<адрес_сервера>:8080/ws` (или `wss://<адрес_сервера>/ws` при наличии SSL).
+2. **Подписка**:
+   - Инженер (`ENGINEER`) слушает `/topic/public` (общая рассылка) и `/queue/{nickname}` (личные сообщения).
+   - Обычный пользователь (`REGULAR`) — только `/queue/{nickname}`.
+3. **Отправка** сообщений: на эндпоинт STOMP `"/app/chat"`.
+4. **Регистрация** (ONLINE): `"/app/user.addUser"` (JSON: `{"nickName": "...", "role": "...", "status": "ONLINE"}`).
+5. **Отключение** (OFFLINE): `"/app/user.disconnectUser"` (JSON: `{"nickName": "...", "status": "OFFLINE"}`).
+
+#### 2.1 Пример (NaikSoftware/StompProtocolAndroid)
+
+```kotlin
+// 1. Создаём STOMP-клиент
+val stompClient = Stomp.over(
+    Stomp.ConnectionProvider.OKHTTP,
+    "ws://<IP_сервера>:8080/ws" // или wss://<IP_сервера>/ws
+)
+
+// 2. Подключаемся и слушаем события
+stompClient.lifecycle().subscribe { event ->
+    when (event.type) {
+        LifecycleEvent.Type.OPENED -> {
+            Log.d("STOMP", "Подключено к WebSocket")
+            // Можно отправить "user.addUser", если нужно
+        }
+        LifecycleEvent.Type.ERROR -> {
+            Log.e("STOMP", "Ошибка: ${event.exception}")
+        }
+        LifecycleEvent.Type.CLOSED -> {
+            Log.d("STOMP", "Соединение закрыто")
+        }
+    }
+}
+
+// 3. Старт соединения
+stompClient.connect()
+
+// 4. Подписка на личные сообщения
+val myNickname = "user123"
+stompClient.topic("/queue/$myNickname").subscribe { stompMessage ->
+    val jsonBody = stompMessage.payload
+    val chatMessage = Gson().fromJson(jsonBody, ChatMessage::class.java)
+    // Обновляем UI, добавляем новое сообщение
+}
+
+// 5. Отправка нового сообщения
+val chatMessage = ChatMessage(
+    senderId = "user123",
+    recipientId = "engineer1",
+    content = "Привет из Android!",
+    timestamp = Date()
+)
+val jsonMsg = Gson().toJson(chatMessage)
+stompClient.send("/app/chat", jsonMsg).subscribe()
+```
 
 ---
 
+### 3. Общий алгоритм
+
+1. **(Опционально)** Авторизация пользователя (через REST или получение токена).
+2. **Загрузка** списка пользователей (`GET /users`) — если роль `ENGINEER`.
+3. **Подключение** к WebSocket (`stompClient.connect()`).
+4. **Регистрация** (ONLINE) — `"/app/user.addUser"`.
+5. **Загрузка истории** (`GET /messages/{from}/{to}`) при выборе собеседника.
+6. **Отправка сообщений** через STOMP `"/app/chat"`.
+7. **Просмотр входящих** сообщений в `"/queue/{nickname}"`.
+8. **Отключение** (OFFLINE) — `"/app/user.disconnectUser"` и `stompClient.disconnect()`.
+
+---
+
+### 4. Дополнительно
+
+- **SSL и HTTPS**: для продакшена рекомендуется использовать WSS (защищённый WebSocket).
+- **Безопасность**: в реальном проекте может потребоваться авторизация (JWT, OAuth2 и т.д.).
+- **Сетевые настройки**: в Android 9+ убедитесь, что используете HTTPS/WSS или правильно настроили [Network Security Config](https://developer.android.com/training/articles/security-config).
+```
