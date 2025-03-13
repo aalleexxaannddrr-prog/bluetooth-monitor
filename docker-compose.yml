@@ -1,23 +1,35 @@
 services:
-  mongodb:
-    image: mongo
-    container_name: mongo_db
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: go_mind_backend
+    image: go-mind-backend
     ports:
-      - 27017:27017
+      - "8080:8080"
     volumes:
-      - mongo:/data
+      - /var/www:/app/uploads
     environment:
-      - MONGO_INITDB_ROOT_USERNAME=alibou
-      - MONGO_INITDB_ROOT_PASSWORD=alibou
-  mongo-express:
-    image: mongo-express
-    container_name: mongo_express
+      SPRING_DATASOURCE_URL: jdbc:mysql://go_mind_db:3306/go_mind?serverTimezone=Europe/Moscow
+      SPRING_DATASOURCE_USERNAME: go_mind_user
+      SPRING_DATASOURCE_PASSWORD: rootpassword
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  db:
+    image: mysql:8.0
+    container_name: go_mind_db
     restart: always
-    ports:
-      - 8081:8081
     environment:
-      - ME_CONFIG_MONGODB_ADMINUSERNAME=alibou
-      - ME_CONFIG_MONGODB_ADMINPASSWORD=alibou
-      - ME_CONFIG_MONGODB_SERVER=mongodb
+      MYSQL_DATABASE: go_mind
+      MYSQL_USER: go_mind_user
+      MYSQL_PASSWORD: rootpassword
+      MYSQL_ROOT_PASSWORD: rootpassword
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password --max_allowed_packet=64M
 volumes:
-  mongo: {}
+  mysql_data:
