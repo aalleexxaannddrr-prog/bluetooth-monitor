@@ -22,5 +22,10 @@ public class ChatRoom {
     private String chatId;
     private String senderId;
     private String recipientId;
+    /**
+     * Поле, показывающее, что чат между пользователем и инженером активен
+     * (т.е. в данный момент «занят»).
+     */
+    private boolean active;
 }
 

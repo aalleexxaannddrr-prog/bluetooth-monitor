@@ -7,6 +7,7 @@ import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.handler.annotation.SendTo;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.List;
 
@@ -31,7 +32,13 @@ public class UserController {
     }
 
     @GetMapping("/users")
-    public ResponseEntity<List<User>> findConnectedUsers() {
-        return ResponseEntity.ok(userService.findConnectedUsers());
+    public ResponseEntity<List<User>> findConnectedUsers(@RequestParam(required = false) String role) {
+        if ("ENGINEER".equals(role)) {
+            // Если пришёл запрос от инженера — показываем только "доступных" пользователей
+            return ResponseEntity.ok(userService.findConnectedUsersForEngineer());
+        } else {
+            // Иначе просто список всех онлайн
+            return ResponseEntity.ok(userService.findConnectedUsers());
+        }
     }
 }

@@ -1,5 +1,15 @@
 # Bluetooth Monitor
 
+ssh -i C:\Users\Asus\.ssh\bluetooth_monitor -l vlad72229 51.250.44.195
+Vlad!123
+
+
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+
+
+
 Пример веб-приложения на WebSocket (SockJS + STOMP) для обмена сообщениями между инженерами и клиентами в реальном времени.
 
 - **Frontend** — HTML/JS (одностраничное приложение: `index.html` и `main.js`).

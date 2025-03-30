@@ -84,8 +84,15 @@ function onConnected() {
  */
 async function findAndDisplayConnectedUsers() {
     try {
-        const connectedUsersResponse = await fetch('/users');
+        // Если текущий пользователь – инженер, добавим ?role=ENGINEER
+        let url = '/users';
+        if (role === 'ENGINEER') {
+            url += '?role=ENGINEER';
+        }
+
+        const connectedUsersResponse = await fetch(url);
         let connectedUsers = await connectedUsersResponse.json();
+
         // Фильтруем, чтобы убрать из списка самого себя
         connectedUsers = connectedUsers.filter(user => user.nickName !== nickname);
 
@@ -94,8 +101,6 @@ async function findAndDisplayConnectedUsers() {
 
         connectedUsers.forEach((user, index) => {
             appendUserElement(user, connectedUsersList);
-
-            // Разделитель между элементами
             if (index < connectedUsers.length - 1) {
                 const separator = document.createElement('li');
                 separator.classList.add('separator');
@@ -106,6 +111,7 @@ async function findAndDisplayConnectedUsers() {
         console.error('Ошибка при загрузке пользователей:', error);
     }
 }
+
 
 /**
  * Формируем li-элемент для списка пользователей (только инженер видит)
