@@ -13,6 +13,7 @@ let stompClient = null;
 let nickname = null;
 let role = null;
 let selectedUserId = null;
+let lastRenderedMsgId = null;
 
 // Обработчик для отправки сообщения при нажатии Enter (без Shift)
 messageInput.addEventListener('keydown', function(e) {
@@ -34,10 +35,17 @@ function connect(event) {
         usernamePage.classList.add('hidden');
 
         // Инженеру сразу показываем чат
-        if (role === 'ENGINEER') {
-            chatPage.classList.remove('hidden');
+        // if (role === 'ENGINEER') {
+        //     chatPage.classList.remove('hidden');
+        // }
+        chatPage.classList.remove('hidden');
+        if (role === 'REGULAR') {
+            messageForm.classList.remove('hidden');
         }
-
+        if (role === 'REGULAR' && !selectedUserId) {
+            // пока инженер не подключился, считаем «получателем» самого себя
+            selectedUserId = nickname;
+        }
         // Инициализируем SockJS + STOMP
         const socket = new SockJS('/ws');
         stompClient = Stomp.over(socket);
@@ -172,8 +180,10 @@ async function fetchAndDisplayUserChat() {
         const userChatResponse = await fetch(`/messages/${nickname}/${selectedUserId}`);
         const userChat = await userChatResponse.json();
         chatArea.innerHTML = '';
+        // userChat.forEach(chat => {
+        //     displayMessage(chat.senderId, chat.content);
         userChat.forEach(chat => {
-            displayMessage(chat.senderId, chat.content);
+            displayMessage(chat.senderId, chat.content, chat.id);
         });
         chatArea.scrollTop = chatArea.scrollHeight;
     } catch (error) {
@@ -195,6 +205,11 @@ function onError() {
  */
 function sendMessage(event) {
     // Если у нас не выбран собеседник, ничего не делаем
+    if (!selectedUserId && role === 'REGULAR') {
+        // пользователь ещё не «прикреплён» к инженеру,
+        // поэтому временно шлём сообщения «самому себе»
+        selectedUserId = nickname;
+    }
     if (!selectedUserId) {
         return;
     }
@@ -237,20 +252,36 @@ async function onMessageReceived(payload) {
 
     // Если мы REGULAR и ещё не видим чат, значит, инженер начал диалог
     if (role === 'REGULAR') {
+
         if (chatPage.classList.contains('hidden')) {
             chatPage.classList.remove('hidden');
         }
-        // Устанавливаем отправителя как выбранного пользователя (только если ещё никого не было)
+
+        // первый вход: ещё вообще нет selectedUserId
         if (!selectedUserId) {
             selectedUserId = message.senderId;
             messageForm.classList.remove('hidden');
             await fetchAndDisplayUserChat();
         }
+
+        // ► если инженер другой – переключаемся
+        if (message.senderId !== nickname       // прислал не «я»
+            && message.senderId !== selectedUserId) { // и это новый инженер
+            selectedUserId = message.senderId;
+            chatArea.innerHTML = '';
+            await fetchAndDisplayUserChat();
+            messageForm.classList.remove('hidden');
+        }
     }
 
+
     // Если нам пришло сообщение от текущего собеседника, сразу отобразим
-    if (selectedUserId && message.senderId === selectedUserId) {
-        displayMessage(message.senderId, message.content);
+    // if (selectedUserId && message.senderId === selectedUserId) {
+    //
+    if (selectedUserId
+        && message.senderId === selectedUserId
+        && message.id !== lastRenderedMsgId) {
+        displayMessage(message.senderId, message.content, message.id);
         chatArea.scrollTop = chatArea.scrollHeight;
     } else {
         // Иначе это может быть сообщение от другого пользователя.
@@ -270,7 +301,7 @@ async function onMessageReceived(payload) {
 /**
  * Отображаем сообщение (простой вывод в чат)
  */
-function displayMessage(senderId, content) {
+function displayMessage(senderId, content, id = null) {
     const messageContainer = document.createElement('div');
     messageContainer.classList.add('message');
     // Если это наше собственное сообщение
@@ -284,6 +315,9 @@ function displayMessage(senderId, content) {
     message.textContent = content;
     messageContainer.appendChild(message);
     chatArea.appendChild(messageContainer);
+    if (id) {
+        lastRenderedMsgId = id;
+    }
 }
 
 /**

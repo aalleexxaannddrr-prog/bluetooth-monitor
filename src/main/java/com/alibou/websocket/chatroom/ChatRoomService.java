@@ -56,13 +56,14 @@ public class ChatRoomService {
      */
     private String createChatId(String senderId, String recipientId) {
         var chatId = String.format("%s_%s", senderId, recipientId);
-
+        boolean activePair = !senderId.equals(recipientId);
         ChatRoom senderRecipient = ChatRoom
                 .builder()
                 .chatId(chatId)
                 .senderId(senderId)
                 .recipientId(recipientId)
-                .active(true)   // устанавливаем активный чат
+//                .active(true)   // устанавливаем активный чат
+                .active(activePair)
                 .build();
 
         ChatRoom recipientSender = ChatRoom
@@ -70,7 +71,8 @@ public class ChatRoomService {
                 .chatId(chatId)
                 .senderId(recipientId)
                 .recipientId(senderId)
-                .active(true)   // зеркальная запись - тоже активна
+//                .active(true)   // зеркальная запись - тоже активна
+                .active(activePair)
                 .build();
 
         chatRoomRepository.save(senderRecipient);
@@ -124,12 +126,14 @@ public class ChatRoomService {
         // Проверяем комбинации:
         if (sender.getRole() == UserRole.ENGINEER && recipient.getRole() == UserRole.REGULAR) {
             // Проверим, есть ли у recipient уже активный чат с каким-то инженером
-            return hasActiveChatWithAnyEngineer(recipient.getNickName());
+//            return hasActiveChatWithAnyEngineer(recipient.getNickName());
+            return isUserInActiveChatWithEngineer(sender.getNickName());
         }
 
         if (recipient.getRole() == UserRole.ENGINEER && sender.getRole() == UserRole.REGULAR) {
             // Аналогично, есть ли у sender уже активный чат?
-            return hasActiveChatWithAnyEngineer(sender.getNickName());
+//            return hasActiveChatWithAnyEngineer(sender.getNickName());
+            return isUserInActiveChatWithEngineer(sender.getNickName());
         }
 
         // Если роли другие (ENGINEER-ENGINEER или REGULAR-REGULAR) — не блокируем
