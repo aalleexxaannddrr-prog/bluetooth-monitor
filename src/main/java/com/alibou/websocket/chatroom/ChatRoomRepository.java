@@ -6,9 +6,6 @@ import java.util.Optional;
 
 public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
     Optional<ChatRoom> findBySenderIdAndRecipientId(String senderId, String recipientId);
-    boolean existsByActiveTrueAndSenderId(String senderId);
-    boolean existsByActiveTrueAndRecipientId(String recipientId);
-
     // Вместо OR в одном методе — делаем два метода:
     List<ChatRoom> findAllBySenderId(String senderId);
     List<ChatRoom> findAllByRecipientId(String recipientId);

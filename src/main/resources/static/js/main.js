@@ -8,6 +8,7 @@ const messageInput = document.querySelector('#message');
 const connectingElement = document.querySelector('.connecting');
 const chatArea = document.querySelector('#chat-messages');
 const logout = document.querySelector('#logout');
+const finishChatBtn = document.getElementById('finishChat');
 
 let stompClient = null;
 let nickname = null;
@@ -67,6 +68,7 @@ function onConnected() {
     // Только инженер подписывается на общий канал (топик) /topic/public
     if (role === 'ENGINEER') {
         stompClient.subscribe("/topic/public", onMessageReceived);
+        stompClient.subscribe("/topic/user-status", onUserStatus);  // <--
     }
 
     // Регистрируем пользователя в базе (устанавливаем ONLINE)
@@ -120,7 +122,25 @@ async function findAndDisplayConnectedUsers() {
     }
 }
 
+async function onUserStatus(payload) {
+    let status;
+    try { status = JSON.parse(payload.body); } catch { return; }
 
+    // если это наш собственный пользователь – игнорируем
+    if (status.userId === nickname) return;
+
+    const list   = document.getElementById('connectedUsers');
+    const li     = document.getElementById(status.userId);
+
+    // 1. пользователь занят -> убрать из списка, если он там есть
+    if (status.busy) {
+        li && li.remove();
+        return;
+    }
+    // 2. пользователь освободился -> подгрузим его, но только если он online
+    //    (проще повторно запросить /users — это лёгкий GET)
+    await findAndDisplayConnectedUsers();
+}
 /**
  * Формируем li-элемент для списка пользователей (только инженер видит)
  */
@@ -153,7 +173,7 @@ function appendUserElement(user, connectedUsersList) {
 /**
  * Когда инженер кликает на пользователя, открывается диалог
  */
-function userItemClick(event) {
+async function userItemClick(event) {
     // Подсветка активного пользователя
     document.querySelectorAll('.user-item').forEach(item => {
         item.classList.remove('active');
@@ -164,6 +184,11 @@ function userItemClick(event) {
     clickedUser.classList.add('active');
 
     selectedUserId = clickedUser.getAttribute('id');
+    await fetch(`/chatrooms/activate/${nickname}/${selectedUserId}`, { method: 'POST' });
+// 2. показываем кнопку «Закончить разговор»
+    finishChatBtn.classList.remove('hidden');
+// 3. обновляем список – у других инженеров пользователь исчезнет
+    await findAndDisplayConnectedUsers();
     fetchAndDisplayUserChat().then();
 
     // Сбрасываем счётчик непрочитанных для данного пользователя
@@ -235,7 +260,16 @@ function sendMessage(event) {
  */
 async function onMessageReceived(payload) {
     console.log('Message received', payload);
+    if (role === 'ENGINEER') {
+        // payload от /topic/public содержит объект User со статусом ONLINE / OFFLINE
+        let msg;
+        try { msg = JSON.parse(payload.body); } catch { msg = {}; }
 
+        // интересуют только REGULAR-ы и только если он ONLINE
+        if (msg.role === 'REGULAR' && msg.status === 'ONLINE') {
+            await findAndDisplayConnectedUsers();
+        }
+    }
     // Если это не валидный JSON — пропускаем
     let message;
     try {
@@ -245,10 +279,6 @@ async function onMessageReceived(payload) {
         return;
     }
 
-    // Для удобства заново загрузим список пользователей, если мы инженер
-    if (role === 'ENGINEER') {
-        await findAndDisplayConnectedUsers();
-    }
 
     // Если мы REGULAR и ещё не видим чат, значит, инженер начал диалог
     if (role === 'REGULAR') {
@@ -330,6 +360,7 @@ function onLogout() {
         {},
         JSON.stringify({ nickName: nickname, status: 'OFFLINE' })
     );
+    finishChatBtn.classList.add('hidden');
     window.location.reload();
 }
 
@@ -337,6 +368,20 @@ function onLogout() {
 usernameForm.addEventListener('submit', connect, true);
 messageForm.addEventListener('submit', sendMessage, true);
 logout.addEventListener('click', onLogout, true);
+finishChatBtn.addEventListener('click', async () => {
+    if (!selectedUserId) return;
 
+    // 1. снимаем «занятие» на сервере
+    await fetch(`/chatrooms/deactivate/${nickname}/${selectedUserId}`, { method: 'POST' });
+
+    // 2. чистим интерфейс
+    selectedUserId = null;
+    chatArea.innerHTML = '';
+    messageForm.classList.add('hidden');
+    finishChatBtn.classList.add('hidden');
+
+    // 3. возвращаем пользователя в общий список
+    await findAndDisplayConnectedUsers();
+});
 // При перезагрузке или закрытии страницы отправляем disconnect
 window.onbeforeunload = () => onLogout();

@@ -5,6 +5,7 @@ import com.alibou.websocket.user.UserRepository;
 import com.alibou.websocket.user.UserRole;
 import com.alibou.websocket.user.Status;
 import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -17,7 +18,7 @@ public class ChatRoomService {
 
     private final ChatRoomRepository chatRoomRepository;
     private final UserRepository userRepository;
-
+    private final SimpMessagingTemplate messagingTemplate;
     /**
      * Если createNewRoomIfNotExists = true и нет комнаты,
      * создаём новую, предварительно проверяя «занятость».
@@ -62,7 +63,6 @@ public class ChatRoomService {
                 .chatId(chatId)
                 .senderId(senderId)
                 .recipientId(recipientId)
-//                .active(true)   // устанавливаем активный чат
                 .active(activePair)
                 .build();
 
@@ -71,7 +71,6 @@ public class ChatRoomService {
                 .chatId(chatId)
                 .senderId(recipientId)
                 .recipientId(senderId)
-//                .active(true)   // зеркальная запись - тоже активна
                 .active(activePair)
                 .build();
 
@@ -114,40 +113,98 @@ public class ChatRoomService {
      * и при этом у пользователя уже есть активный чат с каким-то другим инженером.
      */
     private boolean isUserEngineerAndRegularBusy(String senderId, String recipientId) {
-        // Загружаем пользователей (может понадобиться, чтобы получить их роли)
-        User sender = userRepository.findById(senderId).orElse(null);
+        User sender    = userRepository.findById(senderId).orElse(null);
         User recipient = userRepository.findById(recipientId).orElse(null);
 
-        if (sender == null || recipient == null) {
-            // Если у нас нет инфы о пользователях — либо выбрасываем исключение, либо пропускаем
-            return false;
-        }
+        if (sender == null || recipient == null) return false;
 
-        // Проверяем комбинации:
+        // инженер -> пользователь
         if (sender.getRole() == UserRole.ENGINEER && recipient.getRole() == UserRole.REGULAR) {
-            // Проверим, есть ли у recipient уже активный чат с каким-то инженером
-//            return hasActiveChatWithAnyEngineer(recipient.getNickName());
-            return isUserInActiveChatWithEngineer(sender.getNickName());
+            // ДОЛЖНЫ проверять именно пользователя-regular!
+            return isUserInActiveChatWithEngineer(recipient.getNickName());
         }
 
+        // пользователь -> инженер
         if (recipient.getRole() == UserRole.ENGINEER && sender.getRole() == UserRole.REGULAR) {
-            // Аналогично, есть ли у sender уже активный чат?
-//            return hasActiveChatWithAnyEngineer(sender.getNickName());
             return isUserInActiveChatWithEngineer(sender.getNickName());
         }
-
-        // Если роли другие (ENGINEER-ENGINEER или REGULAR-REGULAR) — не блокируем
         return false;
     }
 
-    /**
-     * Проверяем, есть ли у пользователя (regularUserId) активная комната с любым инженером.
-     */
-    private boolean hasActiveChatWithAnyEngineer(String regularUserId) {
-        return chatRoomRepository.existsByActiveTrueAndSenderId(regularUserId)
-                || chatRoomRepository.existsByActiveTrueAndRecipientId(regularUserId);
+    public String activateChat(String engineerId, String userId) {
+
+        // 1. ищем (или создаём) комнату engineer → user
+        ChatRoom room = chatRoomRepository
+                .findBySenderIdAndRecipientId(engineerId, userId)
+                .orElse(null);
+
+        boolean stateChanged = false;
+
+        // ♦  А) комнаты нет ─ создаём пару и сразу считаем, что состояние изменилось
+        if (room == null) {
+            createChatId(engineerId, userId);               // active=true
+            room = chatRoomRepository.findBySenderIdAndRecipientId(
+                    engineerId, userId).orElseThrow();
+            stateChanged = true;                            // ← ОБЯЗАТЕЛЬНО!
+        }
+        // ♦  Б) комната была, но была неактивна
+        else if (!room.isActive()) {
+            room.setActive(true);
+            chatRoomRepository.save(room);
+            stateChanged = true;
+        }
+
+        // 2. зеркальная запись (user → engineer) — как было
+        chatRoomRepository.findBySenderIdAndRecipientId(userId, engineerId)
+                .ifPresent(mirror -> {
+                    if (!mirror.isActive()) {
+                        mirror.setActive(true);
+                        chatRoomRepository.save(mirror);
+                    }
+                });
+
+        // 3. если пользователь действительно «захвачен» – шлём событие busy
+        if (stateChanged) {
+            messagingTemplate.convertAndSend(
+                    "/topic/user-status",
+                    new UserBusyStatus(userId, true));
+        }
+        return room.getChatId();
     }
 
+    /**
+     * Деактивируем конкретную пару engineer ↔ user
+     * и говорим всем инженерам, что user освободился.
+     */
+    public void deactivatePair(String engineerId, String userId) {
+
+        boolean stateChanged = false;
+
+        // 1. engineer → user
+        Optional<ChatRoom> direct = chatRoomRepository
+                .findBySenderIdAndRecipientId(engineerId, userId);
+        if (direct.isPresent() && direct.get().isActive()) {
+            direct.get().setActive(false);
+            chatRoomRepository.save(direct.get());
+            stateChanged = true;
+        }
+
+        // 2. user → engineer
+        Optional<ChatRoom> mirror = chatRoomRepository
+                .findBySenderIdAndRecipientId(userId, engineerId);
+        if (mirror.isPresent() && mirror.get().isActive()) {
+            mirror.get().setActive(false);
+            chatRoomRepository.save(mirror.get());
+            stateChanged = true;
+        }
+
+        // 3. если хотя бы одна запись изменилась – рассылаем «free»
+        if (stateChanged) {
+            messagingTemplate.convertAndSend(
+                    "/topic/user-status",
+                    new UserBusyStatus(userId, false));  // busy = false
+        }
+    }
     /**
      * При отключении пользователя (или инженера) – переводим все связанные комнаты в неактивные.
      * (Либо можно точечно лишь ту одну комнату, в которой они состыкованы — зависит от бизнес-логики.)
