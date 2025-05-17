@@ -1,60 +1,169 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- шрифт -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- основной css -->
     <link rel="stylesheet" href="css/main.css">
-    <title>Демонстрационный сайт функциональности</title>
+
+    <!-- маленький штрих для стрелки summary -->
+    <style>
+        details#intro summary{cursor:pointer;font-weight:600;list-style:none}
+        details#intro summary::before{content:"▶";display:inline-block;margin-right:.4rem;transition:.2s transform}
+        details#intro[open] summary::before{transform:rotate(90deg)}
+    </style>
+
+    <title>Демонстрация возможностей</title>
 </head>
 <body>
 
-<h2>Двухсторонняя синхронная передача данных</h2>
+<h1 class="page-title">Двусторонняя синхронная передача данных</h1>
 
-<div class="user-form" id="username-page">
+<!-- ░░░  ОПИСАНИЕ РАБОТЫ СИСТЕМЫ (строго по коду)  ░░░ -->
+<details id="intro">
+    <summary>Как работает система</summary>
+    <div class="intro-body">
+
+        <!-- 1. Участники -->
+        <h2>1. Роли</h2>
+        <ul>
+            <li><b>ENGINEER</b> – сотрудник поддержки. Видит список свободных клиентов-REGULAR.</li>
+            <li><b>REGULAR</b>  – клиент. Видит только свой чат.</li>
+        </ul>
+
+        <!-- 2. Подключение -->
+        <h2>2. Что происходит при входе</h2>
+        <ol>
+            <li>Страница открывает WebSocket → STOMP-сессию <code>/ws</code>.</li>
+            <li>Клиент шлёт <code>/app/user.addUser</code> { nick, role, ONLINE }.</li>
+            <li>Запись о пользователе кладётся в БД, всем рассылается через <code>/topic/public</code>.</li>
+        </ol>
+
+        <!-- 3. Список клиентов у инженера -->
+        <h2>3. Откуда берётся список «Пользователи онлайн»</h2>
+        <ul>
+            <li>Инженер делает GET <code>/users?role=ENGINEER</code>.</li>
+            <li>Сервис отдаёт всех ONLINE-REGULAR, которые <i>не</i> находятся
+                в активной комнате с любым инженером.</li>
+            <li>Когда клиент «захвачен» или «освобождён», backend шлёт событие
+                <code>/topic/user-status</code> со свойством <kbd>busy</kbd>; фронт перерисовывает список.</li>
+        </ul>
+
+        <!-- 4. Захват клиента -->
+        <h2>4. Начало диалога</h2>
+        <ol>
+            <li>Инженер кликает по имени клиента → POST
+                <code>/chatrooms/activate/&lt;ENG&gt;/&lt;USER&gt;</code>.</li>
+            <li>Если комнаты не было, создаётся пара «ENG → USER» и «USER → ENG» с
+                <code>active = true</code>.</li>
+            <li>Всем инженерам рассылается <kbd>busy:true</kbd>, поэтому клиента
+                мгновенно убирают из своих списков.</li>
+            <li>У REGULAR теперь видно поле ввода и кнопку «Закончить разговор».</li>
+        </ol>
+
+        <!-- 5. Переписка -->
+        <h2>5. Обмен сообщениями</h2>
+        <ul>
+            <li>Любая сторона отправляет кадр <code>/app/chat</code>.</li>
+            <li>Сообщение сохраняется в таблице <code>chat_message</code>
+                вместе с <code>id</code> и <code>timestamp</code>.</li>
+            <li>Backend публикует его на <code>/queue/&lt;recipientId&gt;</code>.</li>
+            <li>Фронт выводит сообщение, проверяя, что <code>id</code>
+                отличается от <code>lastRenderedMsgId</code> – предотвращаем дубликаты.</li>
+            <li><kbd>Enter</kbd> отправляет; <kbd>Shift+Enter</kbd> переносит строку.</li>
+        </ul>
+
+        <!-- 6. Завершение -->
+        <h2>6. Завершение диалога</h2>
+        <ol>
+            <li>Кнопка «Закончить разговор» вызывает
+                <code>/chatrooms/deactivate/ENG/USER</code>.</li>
+            <li>Обе записи ChatRoom получают <code>active=false</code>.</li>
+            <li>Backend шлёт <kbd>busy:false</kbd> – инженеры снова видят клиента в списке.</li>
+            <li>У обеих сторон чат очищается, форма ввода прячется.</li>
+        </ol>
+
+        <!-- 7. Выход пользователя -->
+        <h2>7. Выход или закрытие вкладки</h2>
+        <ul>
+            <li>Перед анлоудом JS вызывает <code>onLogout()</code> → кадр
+                <code>/app/user.disconnectUser</code>.</li>
+            <li>Backend ставит статус OFFLINE и
+                <code>chatRoomService.deactivateChatsForUser()</code> закрывает все его активные комнаты.</li>
+            <li>Если OFFLINE ушёл инженер – у REGULAR скрывается кнопка «Закончить», окно очищается.</li>
+        </ul>
+
+        <!-- 8. Отладка: «чат сам с собой» -->
+        <h2>8. Временный режим «сам с собой»</h2>
+        <p>
+            Пока к REGULAR не подключился инженер, фронт использует ник клиента
+            как <kbd>selectedUserId</kbd>; сообщения летят «самому себе» и сохраняются.
+            Это позволяет клиенту написать текст заранее.
+        </p>
+
+        <button id="hideIntroBtn" type="button">Свернуть описание</button>
+    </div>
+</details>
+<!-- ░░░  /описание  ░░░ -->
+
+<!-- ===== форма входа ===== -->
+<section class="user-form" id="username-page">
     <h2>Вход</h2>
     <form id="usernameForm">
         <label for="nickname">Номер телефона:</label>
-        <input type="text" id="nickname" name="nickname" required>
+        <input type="text" id="nickname" required>
 
         <label for="role">Роль пользователя:</label>
-        <select id="role" name="role" required>
+        <select id="role" required>
             <option value="ENGINEER">Инженер</option>
             <option value="REGULAR">Пользователь</option>
         </select>
 
         <button type="submit">Войти</button>
     </form>
-</div>
+</section>
 
-<div class="chat-container hidden" id="chat-page">
-    <div class="users-list">
-        <div class="users-list-container">
-            <h2>Пользователи онлайн</h2>
-            <ul id="connectedUsers">
-            </ul>
-        </div>
-        <div>
-            <p id="connected-user-nickname"></p>
+<!-- ===== основной чат ===== -->
+<section class="chat-container hidden" id="chat-page">
+    <!-- левая колонка -->
+    <aside class="users-list">
+        <header><h2>Пользователи онлайн</h2></header>
+
+        <ul class="users-list-container" id="connectedUsers"></ul>
+
+        <footer class="users-footer">
+            <span id="connected-user-nickname"></span>
             <a class="logout" href="javascript:void(0)" id="logout">Выйти</a>
-        </div>
-    </div>
+        </footer>
+    </aside>
 
-    <div class="chat-area">
-        <div class="chat-area" id="chat-messages">
-        </div>
+    <!-- правая часть -->
+    <main class="chat-area">
+        <div id="chat-messages"></div>
 
-        <form id="messageForm" name="messageForm" class="hidden">
+        <form id="messageForm" class="hidden">
             <div class="message-input">
-                <textarea autocomplete="off" id="message" placeholder="Type your message..." rows="3"></textarea>
+                <textarea id="message" placeholder="Введите сообщение…" rows="3" autocomplete="off"></textarea>
                 <button type="submit">Отправить</button>
             </div>
         </form>
-        <button id="finishChat" class="hidden">Закончить разговор</button>
-    </div>
-</div>
 
+        <button id="finishChat" class="hidden">Закончить разговор</button>
+    </main>
+</section>
+
+<!-- скрипты -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.1.4/sockjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
 <script src="/js/main.js"></script>
+<script>
+    /* кнопка «Свернуть описание» */
+    document.querySelector('#hideIntroBtn').onclick = () => {
+        document.getElementById('intro').open = false;
+        window.scroll({top: 0, behavior: 'smooth'});
+    };
+</script>
 </body>
 </html>

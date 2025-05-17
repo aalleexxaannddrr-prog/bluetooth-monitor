@@ -9,7 +9,7 @@ const connectingElement = document.querySelector('.connecting');
 const chatArea = document.querySelector('#chat-messages');
 const logout = document.querySelector('#logout');
 const finishChatBtn = document.getElementById('finishChat');
-
+finishChatBtn.addEventListener('click', deactivateCurrentChat, true);
 let stompClient = null;
 let nickname = null;
 let role = null;
@@ -23,6 +23,28 @@ messageInput.addEventListener('keydown', function(e) {
         sendMessage(e);
     }
 });
+
+async function deactivateCurrentChat() {
+    if (!selectedUserId) return;           // если собеседника нет — выходим
+
+    // Кто инженер, а кто обычный пользователь?
+    const engineerId = role === 'ENGINEER' ? nickname       : selectedUserId;
+    const  userId    = role === 'ENGINEER' ? selectedUserId : nickname;
+
+    // говорим серверу «чат окончен»
+    await fetch(`/chatrooms/deactivate/${engineerId}/${userId}`, { method: 'POST' });
+
+    // чистим экран
+    selectedUserId = null;
+    chatArea.innerHTML = '';
+    messageForm.classList.add('hidden');
+    finishChatBtn.classList.add('hidden');
+
+    // если ты инженер — вернём пользователя обратно в список
+    if (role === 'ENGINEER') {
+        await findAndDisplayConnectedUsers();
+    }
+}
 
 /**
  * Подключаемся к сокету и настраиваем подписки
@@ -132,6 +154,17 @@ async function onUserStatus(payload) {
     const list   = document.getElementById('connectedUsers');
     const li     = document.getElementById(status.userId);
 
+    if (!status.busy && role === 'ENGINEER' && selectedUserId === status.userId) {
+        selectedUserId = null;                  // больше нет активного собеседника
+        chatArea.innerHTML = '';                // чистим историю
+        messageForm.classList.add('hidden');    // прячем форму ввода
+        finishChatBtn.classList.add('hidden');  // прячем кнопку «Закончить разговор»
+
+        // убираем подсветку в списке
+        document.querySelectorAll('.user-item').forEach(item =>
+            item.classList.remove('active')
+        );
+    }
     // 1. пользователь занят -> убрать из списка, если он там есть
     if (status.busy) {
         li && li.remove();
@@ -302,6 +335,7 @@ async function onMessageReceived(payload) {
             await fetchAndDisplayUserChat();
             messageForm.classList.remove('hidden');
         }
+        finishChatBtn.classList.remove('hidden');
     }
 
 
@@ -310,7 +344,7 @@ async function onMessageReceived(payload) {
     //
     if (selectedUserId
         && message.senderId === selectedUserId
-        && message.id !== lastRenderedMsgId) {
+        && message.id.toString() !== lastRenderedMsgId) {
         displayMessage(message.senderId, message.content, message.id);
         chatArea.scrollTop = chatArea.scrollHeight;
     } else {
@@ -345,8 +379,8 @@ function displayMessage(senderId, content, id = null) {
     message.textContent = content;
     messageContainer.appendChild(message);
     chatArea.appendChild(messageContainer);
-    if (id) {
-        lastRenderedMsgId = id;
+    if (id !== null && id !== undefined) {
+        lastRenderedMsgId = id.toString();
     }
 }
 
@@ -368,20 +402,6 @@ function onLogout() {
 usernameForm.addEventListener('submit', connect, true);
 messageForm.addEventListener('submit', sendMessage, true);
 logout.addEventListener('click', onLogout, true);
-finishChatBtn.addEventListener('click', async () => {
-    if (!selectedUserId) return;
 
-    // 1. снимаем «занятие» на сервере
-    await fetch(`/chatrooms/deactivate/${nickname}/${selectedUserId}`, { method: 'POST' });
-
-    // 2. чистим интерфейс
-    selectedUserId = null;
-    chatArea.innerHTML = '';
-    messageForm.classList.add('hidden');
-    finishChatBtn.classList.add('hidden');
-
-    // 3. возвращаем пользователя в общий список
-    await findAndDisplayConnectedUsers();
-});
 // При перезагрузке или закрытии страницы отправляем disconnect
 window.onbeforeunload = () => onLogout();
