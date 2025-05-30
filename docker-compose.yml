@@ -8,7 +8,6 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - /var/www:/app/uploads
     environment:
       SPRING_DATASOURCE_URL: jdbc:mysql://go_mind_db:3306/go_mind?serverTimezone=Europe/Moscow
