@@ -2,11 +2,12 @@ package com.alibou.websocket.chat;
 
 import com.alibou.websocket.chatroom.ChatRoomService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
-
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ChatMessageService {
@@ -19,6 +20,10 @@ public class ChatMessageService {
                 .orElseThrow(); // You can create your own dedicated exception
         chatMessage.setChatId(chatId);
         repository.save(chatMessage);
+        log.info("Сообщение {} сохранено ({} → {})",
+                chatMessage.getId(),
+                chatMessage.getSenderId(),
+                chatMessage.getRecipientId());
         return chatMessage;
     }
 

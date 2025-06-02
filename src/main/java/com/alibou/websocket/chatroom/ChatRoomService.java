@@ -5,6 +5,7 @@ import com.alibou.websocket.user.UserRepository;
 import com.alibou.websocket.user.UserRole;
 import com.alibou.websocket.user.Status;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +15,7 @@ import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ChatRoomService {
 
     private final ChatRoomRepository chatRoomRepository;
@@ -43,6 +45,7 @@ public class ChatRoomService {
 
         // 2. Раз чата пока нет, перед созданием проверяем, не занят ли пользователь другим инженером
         if (isUserEngineerAndRegularBusy(senderId, recipientId)) {
+            log.warn("Не удалось создать чат: пользователь {} уже занят", recipientId);
             // Можете пробросить своё исключение, например ChatRoomBusyException:
             throw new RuntimeException("Пользователь уже занят другим инженером!");
         }
@@ -76,7 +79,7 @@ public class ChatRoomService {
 
         chatRoomRepository.save(senderRecipient);
         chatRoomRepository.save(recipientSender);
-
+        log.info("Создана новая комната {} ({} ↔ {})", chatId, senderId, recipientId);
         return chatId;
     }
     public boolean isUserInActiveChatWithEngineer(String userId) {
@@ -165,6 +168,7 @@ public class ChatRoomService {
 
         // 3. если пользователь действительно «захвачен» – шлём событие busy
         if (stateChanged) {
+            log.info("Пользователь {} ЗАНЯТ инженером {}", userId, engineerId);
             messagingTemplate.convertAndSend(
                     "/topic/user-status",
                     new UserBusyStatus(userId, true));
@@ -200,9 +204,11 @@ public class ChatRoomService {
 
         // 3. если хотя бы одна запись изменилась – рассылаем «free»
         if (stateChanged) {
+            log.info("Пользователь {} СВОБОДЕН (инженер {})", userId, engineerId);
             messagingTemplate.convertAndSend(
                     "/topic/user-status",
                     new UserBusyStatus(userId, false));  // busy = false
+
         }
     }
     /**
@@ -224,5 +230,6 @@ public class ChatRoomService {
             room.setActive(false);
         }
         chatRoomRepository.saveAll(allRooms);
+        log.info("Все комнаты пользователя {} переведены в неактивные", userId);
     }
 }

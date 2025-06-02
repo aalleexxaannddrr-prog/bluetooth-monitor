@@ -1,6 +1,7 @@
 package com.alibou.websocket.chat;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -11,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 
 import java.util.List;
 
+@Slf4j
 @Controller
 @RequiredArgsConstructor
 public class ChatController {
@@ -32,6 +34,11 @@ public class ChatController {
                         savedMsg.getContent()
                 )
         );
+        log.info("Сообщение {} отправлено по /queue/{} ({} → {})",
+                savedMsg.getId(),
+                savedMsg.getRecipientId(),
+                savedMsg.getSenderId(),
+                savedMsg.getRecipientId());
     }
 
     @GetMapping("/messages/{senderId}/{recipientId}")

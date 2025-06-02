@@ -3,12 +3,14 @@ package com.alibou.websocket.user;
 
 import com.alibou.websocket.chatroom.ChatRoomService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class UserService {
 
     private final UserRepository repository;
@@ -17,6 +19,9 @@ public class UserService {
     public void saveUser(User user) {
         user.setStatus(Status.ONLINE);
         repository.save(user);
+        log.info("Пользователь {} ONLINE (роль {})",
+                user.getNickName(),
+                user.getRole());
     }
 
     public void disconnect(User user) {
@@ -27,6 +32,8 @@ public class UserService {
 
             // Отключаем все активные чаты с этим пользователем
             chatRoomService.deactivateChatsForUser(storedUser.getNickName());
+            log.info("Пользователь {} OFFLINE, активные чаты закрыты",
+                    storedUser.getNickName());
         }
     }
     public List<User> findConnectedUsersForEngineer() {
