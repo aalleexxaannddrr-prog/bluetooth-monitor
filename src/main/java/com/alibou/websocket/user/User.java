@@ -1,21 +1,16 @@
 package com.alibou.websocket.user;
 
 import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-@Getter
-@Setter
-@Entity
-@Table(name = "users")
-public class User {
-    @Id
+@Getter @Setter
+@AllArgsConstructor      //  ← ДОБАВИЛИ
+@NoArgsConstructor  // Lombok
+public class User {                //   <-- убрали @Entity и @Table
     private String nickName;
-
-    @Enumerated(EnumType.STRING)
     private Status status;
-
-    @Enumerated(EnumType.STRING)
     private UserRole role;
 }
-

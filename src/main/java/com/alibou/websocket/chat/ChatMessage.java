@@ -7,24 +7,19 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import java.util.Date;
 
+import lombok.*;
+import java.util.Date;
+
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
 @Builder
-@Entity
-@Table(name = "chat_message")
 public class ChatMessage {
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
 
+    private Long   id;          // будет генерироваться в памяти
     private String chatId;
     private String senderId;
     private String recipientId;
-
-    @Column(columnDefinition = "TEXT")
     private String content;
-
-    @Temporal(TemporalType.TIMESTAMP)
-    private Date timestamp;
+    private Date   timestamp;
 }

@@ -17,22 +17,32 @@ let selectedUserId = null;
 let lastRenderedMsgId = null;
 
 // Обработчик для отправки сообщения при нажатии Enter (без Shift)
-messageInput.addEventListener('keydown', function(e) {
+messageInput.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         sendMessage(e);
     }
 });
 
+function switchToChatUI() {
+    usernamePage.classList.add ('hidden');
+    chatPage   .classList.remove('hidden');
+
+    if (role === 'REGULAR') messageForm.classList.remove('hidden');
+    document.querySelector('#connected-user-nickname').textContent = nickname;
+
+    if (role === 'ENGINEER') findAndDisplayConnectedUsers();
+}
+
 async function deactivateCurrentChat() {
     if (!selectedUserId) return;           // если собеседника нет — выходим
 
     // Кто инженер, а кто обычный пользователь?
-    const engineerId = role === 'ENGINEER' ? nickname       : selectedUserId;
-    const  userId    = role === 'ENGINEER' ? selectedUserId : nickname;
+    const engineerId = role === 'ENGINEER' ? nickname : selectedUserId;
+    const userId = role === 'ENGINEER' ? selectedUserId : nickname;
 
     // говорим серверу «чат окончен»
-    await fetch(`/chatrooms/deactivate/${engineerId}/${userId}`, { method: 'POST' });
+    await fetch(`/chatrooms/deactivate/${engineerId}/${userId}`, {method: 'POST'});
 
     // чистим экран
     selectedUserId = null;
@@ -51,30 +61,13 @@ async function deactivateCurrentChat() {
  */
 function connect(event) {
     nickname = document.querySelector('#nickname').value.trim();
-    role = document.querySelector('#role').value.trim();
+    role     = document.querySelector('#role').value.trim();
 
     if (nickname && role) {
-        // Скрываем форму с ником
-        usernamePage.classList.add('hidden');
-
-        // Инженеру сразу показываем чат
-        // if (role === 'ENGINEER') {
-        //     chatPage.classList.remove('hidden');
-        // }
-        chatPage.classList.remove('hidden');
-        if (role === 'REGULAR') {
-            messageForm.classList.remove('hidden');
-        }
-        if (role === 'REGULAR' && !selectedUserId) {
-            // пока инженер не подключился, считаем «получателем» самого себя
-            selectedUserId = nickname;
-        }
-        // Инициализируем SockJS + STOMP
+        // создаём SockJS + STOMP без предварительного скрытия формы
         const socket = new SockJS('/ws');
-        stompClient = Stomp.over(socket);
-
-        // Подключаемся
-        stompClient.connect({}, onConnected, onError);
+        stompClient  = Stomp.over(socket);
+        stompClient.connect({nickName: nickname}, onConnected, onError);
     }
     event.preventDefault();
 }
@@ -83,33 +76,44 @@ function connect(event) {
  * Коллбэк при успешном подключении STOMP
  */
 function onConnected() {
-    // Подписка на личные сообщения:
-    // вместо `/user/${nickname}/queue/messages` -> `/queue/<nickname>`
+
+    /* 1. личная очередь ошибок (ник занят) ---------------- */
+    stompClient.subscribe('/user/queue/errors', frame => {
+        alert(frame.body);
+        stompClient.disconnect();           // остаёмся на форме логина
+    });
+
+    /* 2. подтверждение успешной регистрации --------------- */
+    stompClient.subscribe('/topic/public', frame => {
+        const user = JSON.parse(frame.body);
+
+        // сообщение о нас самих → ник принят
+        if (user.nickName === nickname && user.status === 'ONLINE') {
+            switchToChatUI();
+        }
+
+        // только инженеру нужен список свободных REGULAR-ов
+        if (role === 'ENGINEER' &&
+            user.role === 'REGULAR' &&
+            user.status === 'ONLINE') {
+            findAndDisplayConnectedUsers();
+        }
+    });
+
+    /* 3. персональная очередь сообщений ------------------ */
     stompClient.subscribe(`/queue/${nickname}`, onMessageReceived);
 
-    // Только инженер подписывается на общий канал (топик) /topic/public
-    if (role === 'ENGINEER') {
-        stompClient.subscribe("/topic/public", onMessageReceived);
-        stompClient.subscribe("/topic/user-status", onUserStatus);  // <--
-    }
+    /* 4. ВСЕ слушают смену статуса пользователей ---------- */
+    stompClient.subscribe('/topic/user-status', onUserStatus);
 
-    // Регистрируем пользователя в базе (устанавливаем ONLINE)
+    /* 5. просим сервер зарегистрировать ------------------ */
     stompClient.send(
-        "/app/user.addUser",
+        '/app/user.addUser',
         {},
-        JSON.stringify({ nickName: nickname, role: role, status: 'ONLINE' })
+        JSON.stringify({nickName: nickname, role: role, status: 'ONLINE'})
     );
-
-    document.querySelector('#connected-user-nickname').textContent = nickname;
-
-    // Если это инженер – подгружаем список онлайн-пользователей
-    if (role === 'ENGINEER') {
-        findAndDisplayConnectedUsers().then();
-    } else {
-        // Обычному пользователю список не показываем
-        document.getElementById('connectedUsers').innerHTML = '';
-    }
 }
+
 
 /**
  * Загружаем всех ONLINE-пользователей с сервера и отображаем
@@ -148,32 +152,42 @@ async function onUserStatus(payload) {
     let status;
     try { status = JSON.parse(payload.body); } catch { return; }
 
-    // если это наш собственный пользователь – игнорируем
-    if (status.userId === nickname) return;
+    const userId = status.userId;   // чей статус пришёл
+    const busy   = status.busy;     // true = занят, false = свободен
 
-    const list   = document.getElementById('connectedUsers');
-    const li     = document.getElementById(status.userId);
-
-    if (!status.busy && role === 'ENGINEER' && selectedUserId === status.userId) {
-        selectedUserId = null;                  // больше нет активного собеседника
-        chatArea.innerHTML = '';                // чистим историю
-        messageForm.classList.add('hidden');    // прячем форму ввода
-        finishChatBtn.classList.add('hidden');  // прячем кнопку «Закончить разговор»
-
-        // убираем подсветку в списке
-        document.querySelectorAll('.user-item').forEach(item =>
-            item.classList.remove('active')
-        );
+    /* ---------- 1. REGULAR слышит «я стал свободен» --------------- */
+    if (role === 'REGULAR' && userId === nickname && !busy) {
+        selectedUserId = null;
+        chatArea.innerHTML = '';
+        messageForm.classList.add('hidden');
+        finishChatBtn.classList.add('hidden');
+        return;                     // дальше ничего не нужно
     }
-    // 1. пользователь занят -> убрать из списка, если он там есть
-    if (status.busy) {
+
+    /* ---------- 2. остальное важно только инженеру ---------------- */
+    if (role !== 'ENGINEER') return;
+
+    /* 2-A. если сообщение про активного собеседника и тот освободился */
+    if (userId === selectedUserId && !busy) {
+        selectedUserId = null;
+        chatArea.innerHTML = '';
+        messageForm.classList.add('hidden');
+        finishChatBtn.classList.add('hidden');
+        document.querySelectorAll('.user-item').forEach(li =>
+            li.classList.remove('active'));
+    }
+
+    /* 2-B. обновляем список онлайн-пользователей */
+    if (busy) {
+        // пользователь «занят» – убираем из списка
+        const li = document.getElementById(userId);
         li && li.remove();
-        return;
+    } else {
+        // стал «свободен» – перерисуем список
+        await findAndDisplayConnectedUsers();
     }
-    // 2. пользователь освободился -> подгрузим его, но только если он online
-    //    (проще повторно запросить /users — это лёгкий GET)
-    await findAndDisplayConnectedUsers();
 }
+
 /**
  * Формируем li-элемент для списка пользователей (только инженер видит)
  */
@@ -217,7 +231,7 @@ async function userItemClick(event) {
     clickedUser.classList.add('active');
 
     selectedUserId = clickedUser.getAttribute('id');
-    await fetch(`/chatrooms/activate/${nickname}/${selectedUserId}`, { method: 'POST' });
+    await fetch(`/chatrooms/activate/${nickname}/${selectedUserId}`, {method: 'POST'});
 // 2. показываем кнопку «Закончить разговор»
     finishChatBtn.classList.remove('hidden');
 // 3. обновляем список – у других инженеров пользователь исчезнет
@@ -238,8 +252,6 @@ async function fetchAndDisplayUserChat() {
         const userChatResponse = await fetch(`/messages/${nickname}/${selectedUserId}`);
         const userChat = await userChatResponse.json();
         chatArea.innerHTML = '';
-        // userChat.forEach(chat => {
-        //     displayMessage(chat.senderId, chat.content);
         userChat.forEach(chat => {
             displayMessage(chat.senderId, chat.content, chat.id);
         });
@@ -252,41 +264,47 @@ async function fetchAndDisplayUserChat() {
 /**
  * Обработчик ошибок WebSocket
  */
-function onError() {
-    connectingElement.textContent =
-        'Не удалось подключиться к WebSocket. Пожалуйста, обновите страницу и попробуйте снова!';
-    connectingElement.style.color = 'red';
+function onError(frame) {
+    if (frame && frame.headers && frame.headers['message']) {
+        alert(frame.headers['message']);   // «Ник уже используется»
+        window.location.reload();
+    } else {
+        connectingElement.textContent =
+            'Не удалось подключиться к WebSocket. Пожалуйста, попробуйте снова!';
+        connectingElement.style.color = 'red';
+    }
 }
 
 /**
  * Отправляем новое сообщение
  */
 function sendMessage(event) {
-    // Если у нас не выбран собеседник, ничего не делаем
-    if (!selectedUserId && role === 'REGULAR') {
-        // пользователь ещё не «прикреплён» к инженеру,
-        // поэтому временно шлём сообщения «самому себе»
-        selectedUserId = nickname;
-    }
-    if (!selectedUserId) {
-        return;
-    }
+    // REGULAR до привязки к инженеру шлёт самому себе
+    if (!selectedUserId && role === 'REGULAR') selectedUserId = nickname;
+    if (!selectedUserId) return;
 
-    const messageContent = messageInput.value.trim();
-    if (messageContent && stompClient) {
+    const text = messageInput.value.trim();
+    if (text && stompClient) {
         const chatMessage = {
-            senderId: nickname,
-            recipientId: selectedUserId,
-            content: messageInput.value,  // сохраняем переносы строк
-            timestamp: new Date()
+            senderId    : nickname,
+            recipientId : selectedUserId,
+            content     : text,
+            timestamp   : new Date()
         };
         stompClient.send("/app/chat", {}, JSON.stringify(chatMessage));
-        displayMessage(nickname, messageInput.value);
+
+        /* echo только если пишем НЕ себе (иначе придёт с брокера) */
+        if (nickname !== selectedUserId) {
+            displayMessage(nickname, text);
+        }
         messageInput.value = '';
     }
+
     chatArea.scrollTop = chatArea.scrollHeight;
     event.preventDefault();
 }
+
+
 
 /**
  * Когда приходит сообщение (либо из /topic/public, либо личное (/queue/<user>))
@@ -296,7 +314,11 @@ async function onMessageReceived(payload) {
     if (role === 'ENGINEER') {
         // payload от /topic/public содержит объект User со статусом ONLINE / OFFLINE
         let msg;
-        try { msg = JSON.parse(payload.body); } catch { msg = {}; }
+        try {
+            msg = JSON.parse(payload.body);
+        } catch {
+            msg = {};
+        }
 
         // интересуют только REGULAR-ы и только если он ONLINE
         if (msg.role === 'REGULAR' && msg.status === 'ONLINE') {
@@ -339,9 +361,6 @@ async function onMessageReceived(payload) {
     }
 
 
-    // Если нам пришло сообщение от текущего собеседника, сразу отобразим
-    // if (selectedUserId && message.senderId === selectedUserId) {
-    //
     if (selectedUserId
         && message.senderId === selectedUserId
         && message.id.toString() !== lastRenderedMsgId) {
@@ -392,7 +411,7 @@ function onLogout() {
     stompClient.send(
         "/app/user.disconnectUser",
         {},
-        JSON.stringify({ nickName: nickname, status: 'OFFLINE' })
+        JSON.stringify({nickName: nickname, status: 'OFFLINE'})
     );
     finishChatBtn.classList.add('hidden');
     window.location.reload();

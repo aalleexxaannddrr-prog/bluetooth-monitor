@@ -1,11 +1,10 @@
 package com.alibou.websocket.chatroom;
 
-import com.alibou.websocket.user.User;
-import com.alibou.websocket.user.UserRepository;
-import com.alibou.websocket.user.UserRole;
-import com.alibou.websocket.user.Status;
+import com.alibou.websocket.chat.ChatMessageService;
+import com.alibou.websocket.user.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
@@ -14,13 +13,32 @@ import java.util.List;
 import java.util.Optional;
 
 @Service
-@RequiredArgsConstructor
+//@RequiredArgsConstructor
 @Slf4j
 public class ChatRoomService {
 
+    //    @Lazy
     private final ChatRoomRepository chatRoomRepository;
-    private final UserRepository userRepository;
+    private final OnlineUserStore store;
     private final SimpMessagingTemplate messagingTemplate;
+    private final ChatInactivityService inactivity;
+
+    /* добавляем ленивую ссылку, чтобы не создать новый цикл */
+    private final @Lazy ChatMessageService messageService;
+
+    public ChatRoomService(ChatRoomRepository chatRoomRepository,
+                           OnlineUserStore store,
+                           SimpMessagingTemplate messagingTemplate,
+                           @Lazy ChatInactivityService inactivity,
+                           @Lazy ChatMessageService messageService) {
+        this.chatRoomRepository = chatRoomRepository;
+        this.store = store;
+        this.messagingTemplate = messagingTemplate;
+        this.inactivity = inactivity;
+        this.messageService = messageService;
+    }
+
+
     /**
      * Если createNewRoomIfNotExists = true и нет комнаты,
      * создаём новую, предварительно проверяя «занятость».
@@ -82,55 +100,44 @@ public class ChatRoomService {
         log.info("Создана новая комната {} ({} ↔ {})", chatId, senderId, recipientId);
         return chatId;
     }
+
     public boolean isUserInActiveChatWithEngineer(String userId) {
-        // Ищем все активные комнаты, где userId = senderId
-        List<ChatRoom> senderRooms = chatRoomRepository.findAllBySenderIdAndActiveTrue(userId);
-        // Ищем все активные комнаты, где userId = recipientId
-        List<ChatRoom> recipientRooms = chatRoomRepository.findAllByRecipientIdAndActiveTrue(userId);
 
-        // Объединяем результаты
+        // Все активные комнаты, где userId либо sender, либо recipient
         List<ChatRoom> allActiveRooms = new ArrayList<>();
-        allActiveRooms.addAll(senderRooms);
-        allActiveRooms.addAll(recipientRooms);
+        allActiveRooms.addAll(chatRoomRepository.findAllBySenderIdAndActiveTrue(userId));
+        allActiveRooms.addAll(chatRoomRepository.findAllByRecipientIdAndActiveTrue(userId));
 
-        // Проходимся по всем комнатам и ищем, нет ли там инженера на другой стороне
         for (ChatRoom room : allActiveRooms) {
-            // Определяем собеседника
+            // Кто на другой стороне?
             String otherSide = room.getSenderId().equals(userId)
                     ? room.getRecipientId()
                     : room.getSenderId();
 
-            // Находим у репозитория информацию о другом пользователе
-            User otherUser = userRepository.findById(otherSide).orElse(null);
+            // Берём данные о собеседнике из оперативного хранилища
+            User otherUser = store.get(otherSide).orElse(null);
             if (otherUser != null && otherUser.getRole() == UserRole.ENGINEER) {
-                // Если другая сторона — инженер, значит пользователь "занят" чатом
+                // значит наш пользователь «занят» инженером
                 return true;
             }
         }
-
-        // Если в ни одной из комнат нет инженера, пользователь "свободен"
-        return false;
+        return false; // нет активных чатов с инженером
     }
-    /**
-     * Проверяем ситуацию, когда один собеседник — инженер, а другой — пользователь,
-     * и при этом у пользователя уже есть активный чат с каким-то другим инженером.
-     */
+
     private boolean isUserEngineerAndRegularBusy(String senderId, String recipientId) {
-        User sender    = userRepository.findById(senderId).orElse(null);
-        User recipient = userRepository.findById(recipientId).orElse(null);
+        User sender = store.get(senderId).orElse(null);
+        User recipient = store.get(recipientId).orElse(null);
 
         if (sender == null || recipient == null) return false;
 
         // инженер -> пользователь
-        if (sender.getRole() == UserRole.ENGINEER && recipient.getRole() == UserRole.REGULAR) {
-            // ДОЛЖНЫ проверять именно пользователя-regular!
+        if (sender.getRole() == UserRole.ENGINEER && recipient.getRole() == UserRole.REGULAR)
             return isUserInActiveChatWithEngineer(recipient.getNickName());
-        }
 
         // пользователь -> инженер
-        if (recipient.getRole() == UserRole.ENGINEER && sender.getRole() == UserRole.REGULAR) {
+        if (recipient.getRole() == UserRole.ENGINEER && sender.getRole() == UserRole.REGULAR)
             return isUserInActiveChatWithEngineer(sender.getNickName());
-        }
+
         return false;
     }
 
@@ -143,21 +150,22 @@ public class ChatRoomService {
 
         boolean stateChanged = false;
 
-        // ♦  А) комнаты нет ─ создаём пару и сразу считаем, что состояние изменилось
+        // А) комнаты не было ─ создаём новую пару
         if (room == null) {
-            createChatId(engineerId, userId);               // active=true
-            room = chatRoomRepository.findBySenderIdAndRecipientId(
-                    engineerId, userId).orElseThrow();
-            stateChanged = true;                            // ← ОБЯЗАТЕЛЬНО!
+            createChatId(engineerId, userId);           // active=true
+            room = chatRoomRepository
+                    .findBySenderIdAndRecipientId(engineerId, userId)
+                    .orElseThrow();
+            stateChanged = true;
         }
-        // ♦  Б) комната была, но была неактивна
+        // Б) комната была, но была неактивна
         else if (!room.isActive()) {
             room.setActive(true);
             chatRoomRepository.save(room);
             stateChanged = true;
         }
 
-        // 2. зеркальная запись (user → engineer) — как было
+        // 2. зеркальная запись (user → engineer)
         chatRoomRepository.findBySenderIdAndRecipientId(userId, engineerId)
                 .ifPresent(mirror -> {
                     if (!mirror.isActive()) {
@@ -166,15 +174,20 @@ public class ChatRoomService {
                     }
                 });
 
-        // 3. если пользователь действительно «захвачен» – шлём событие busy
+        // 3. если пользователь действительно «захвачен» – шлём busy
         if (stateChanged) {
             log.info("Пользователь {} ЗАНЯТ инженером {}", userId, engineerId);
             messagingTemplate.convertAndSend(
                     "/topic/user-status",
                     new UserBusyStatus(userId, true));
         }
+
+        /* 4. запускаем (или перезапускаем) таймер неактивности */
+        inactivity.touch(engineerId, userId);
+
         return room.getChatId();
     }
+
 
     /**
      * Деактивируем конкретную пару engineer ↔ user
@@ -184,7 +197,9 @@ public class ChatRoomService {
 
         boolean stateChanged = false;
 
-        // 1. engineer → user
+        /* ---------- 1. гасим обе записи в chat_room ---------------- */
+
+        // engineer → user
         Optional<ChatRoom> direct = chatRoomRepository
                 .findBySenderIdAndRecipientId(engineerId, userId);
         if (direct.isPresent() && direct.get().isActive()) {
@@ -193,7 +208,7 @@ public class ChatRoomService {
             stateChanged = true;
         }
 
-        // 2. user → engineer
+        // user → engineer (зеркальная)
         Optional<ChatRoom> mirror = chatRoomRepository
                 .findBySenderIdAndRecipientId(userId, engineerId);
         if (mirror.isPresent() && mirror.get().isActive()) {
@@ -202,15 +217,22 @@ public class ChatRoomService {
             stateChanged = true;
         }
 
-        // 3. если хотя бы одна запись изменилась – рассылаем «free»
+        /* ---------- 2. если статус изменился — шлём free ---------- */
         if (stateChanged) {
             log.info("Пользователь {} СВОБОДЕН (инженер {})", userId, engineerId);
             messagingTemplate.convertAndSend(
                     "/topic/user-status",
-                    new UserBusyStatus(userId, false));  // busy = false
-
+                    new UserBusyStatus(userId, false));
         }
+
+        /* ---------- 3. отменяем таймер неактивности --------------- */
+        inactivity.cancel(engineerId, userId);
+
+        /* ---------- 4. чистим историю сообщений ------------------- */
+        messageService.clearHistory(engineerId, userId);
     }
+
+
     /**
      * При отключении пользователя (или инженера) – переводим все связанные комнаты в неактивные.
      * (Либо можно точечно лишь ту одну комнату, в которой они состыкованы — зависит от бизнес-логики.)

@@ -1,10 +1,10 @@
 package com.alibou.websocket.user;
 
+import com.alibou.websocket.exception.NickAlreadyOnlineException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
-import org.springframework.messaging.handler.annotation.MessageMapping;
-import org.springframework.messaging.handler.annotation.Payload;
-import org.springframework.messaging.handler.annotation.SendTo;
+import org.springframework.messaging.handler.annotation.*;
+import org.springframework.messaging.simp.annotation.SendToUser;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -19,16 +19,19 @@ public class UserController {
 
     @MessageMapping("/user.addUser")
     @SendTo("/topic/public")
-    public User addUser(@Payload User user) {
-        userService.saveUser(user);
+    public User addUser(@Payload User user,
+                        @Header("simpSessionId") String sessId) {
+        userService.saveUser(user, sessId);
         return user;
     }
 
     @MessageMapping("/user.disconnectUser")
     @SendTo("/topic/public")
-    public User disconnectUser(@Payload User user) {
-        userService.disconnect(user);
-        return user;
+    public User disconnectUser(@Payload User user,
+                               @Header("simpSessionId") String sessionId) {
+
+        userService.disconnect(user.getNickName(), sessionId);
+        return user;           // прилетит тем, кто подписан на /topic/public
     }
 
     @GetMapping("/users")
@@ -40,5 +43,10 @@ public class UserController {
             // Иначе просто список всех онлайн
             return ResponseEntity.ok(userService.findConnectedUsers());
         }
+    }
+    @MessageExceptionHandler(NickAlreadyOnlineException.class)
+    @SendToUser("/queue/errors")
+    public String handleNickBusy(NickAlreadyOnlineException ex) {
+        return ex.getMessage();              // «Ник "1" уже используется»
     }
 }
