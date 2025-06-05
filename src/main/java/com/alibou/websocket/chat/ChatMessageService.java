@@ -47,12 +47,12 @@ public class ChatMessageService {
                 chatMessage.getRecipientId());
 
         /* сброс тайм-аута — как было */
-        User s = store.get(chatMessage.getSenderId()).orElse(null);
-        User r = store.get(chatMessage.getRecipientId()).orElse(null);
-        if (s != null && r != null) {
-            String eng = s.getRole()==UserRole.ENGINEER ? s.getNickName() : r.getNickName();
-            String usr = s.getRole()==UserRole.REGULAR  ? s.getNickName() : r.getNickName();
-            inactivity.touch(eng, usr);
+        User sender    = store.get(chatMessage.getSenderId()).orElse(null);
+        User recipient = store.get(chatMessage.getRecipientId()).orElse(null);
+
+        if (sender != null && recipient != null && sender.getRole() == UserRole.REGULAR) {
+            // sender ─- REGULAR, recipient ─- ENGINEER
+            inactivity.touch(recipient.getNickName(), sender.getNickName());
         }
 
         return chatMessage;

@@ -9,6 +9,7 @@ const connectingElement = document.querySelector('.connecting');
 const chatArea = document.querySelector('#chat-messages');
 const logout = document.querySelector('#logout');
 const finishChatBtn = document.getElementById('finishChat');
+const chatBusy = {};
 finishChatBtn.addEventListener('click', deactivateCurrentChat, true);
 let stompClient = null;
 let nickname = null;
@@ -25,13 +26,14 @@ messageInput.addEventListener('keydown', function (e) {
 });
 
 function switchToChatUI() {
-    usernamePage.classList.add ('hidden');
-    chatPage   .classList.remove('hidden');
+    usernamePage.classList.add('hidden');
+    chatPage.classList.remove('hidden');
 
     if (role === 'REGULAR') messageForm.classList.remove('hidden');
     document.querySelector('#connected-user-nickname').textContent = nickname;
 
     if (role === 'ENGINEER') findAndDisplayConnectedUsers();
+    if (role === 'ADMIN') adminInit();
 }
 
 async function deactivateCurrentChat() {
@@ -61,12 +63,12 @@ async function deactivateCurrentChat() {
  */
 function connect(event) {
     nickname = document.querySelector('#nickname').value.trim();
-    role     = document.querySelector('#role').value.trim();
+    role = document.querySelector('#role').value.trim();
 
     if (nickname && role) {
         // создаём SockJS + STOMP без предварительного скрытия формы
         const socket = new SockJS('/ws');
-        stompClient  = Stomp.over(socket);
+        stompClient = Stomp.over(socket);
         stompClient.connect({nickName: nickname}, onConnected, onError);
     }
     event.preventDefault();
@@ -84,21 +86,53 @@ function onConnected() {
     });
 
     /* 2. подтверждение успешной регистрации --------------- */
+    /* 2. подтверждение успешной регистрации --------------- */
     stompClient.subscribe('/topic/public', frame => {
         const user = JSON.parse(frame.body);
 
-        // сообщение о нас самих → ник принят
+        /* ===  NEW: нас отключили за бездействие  ===================== */
+        if (user.nickName === nickname && user.status === 'OFFLINE') {
+            alert('Вы были отключены за отсутствие активности');
+
+            /* сворачиваем UI в исходное состояние */
+            chatPage.classList.add('hidden');
+            usernamePage.classList.remove('hidden');
+            messageForm.classList.add('hidden');
+            finishChatBtn.classList.add('hidden');
+            selectedUserId = null;
+            lastRenderedMsgId = null;
+
+            /* закрываем STOMP-сессию (чтобы можно было залогиниться заново) */
+            if (stompClient && stompClient.connected) {
+                stompClient.disconnect();
+            }
+            return;                         // дальше код не нужен
+        }
+        /* ============================================================= */
+
+        /* если это мы сами и статус ONLINE – просто заходим в чат-UI */
         if (user.nickName === nickname && user.status === 'ONLINE') {
             switchToChatUI();
+            return;
         }
 
-        // только инженеру нужен список свободных REGULAR-ов
-        if (role === 'ENGINEER' &&
-            user.role === 'REGULAR' &&
-            user.status === 'ONLINE') {
-            findAndDisplayConnectedUsers();
+        /* ---------- реакция на любые ONLINE/OFFLINE REGULAR-ов -------- */
+        if (role === 'ENGINEER' && user.role === 'REGULAR') {
+            findAndDisplayConnectedUsers();   // обновляем список
+        }
+
+        /* ---------- активный собеседник внезапно OFFLINE ------------- */
+        if (user.role === 'REGULAR' &&
+            user.status === 'OFFLINE' &&
+            user.nickName === selectedUserId) {
+
+            selectedUserId = null;
+            chatArea.innerHTML = '';
+            messageForm.classList.add('hidden');
+            finishChatBtn.classList.add('hidden');
         }
     });
+
 
     /* 3. персональная очередь сообщений ------------------ */
     stompClient.subscribe(`/queue/${nickname}`, onMessageReceived);
@@ -150,10 +184,14 @@ async function findAndDisplayConnectedUsers() {
 
 async function onUserStatus(payload) {
     let status;
-    try { status = JSON.parse(payload.body); } catch { return; }
+    try {
+        status = JSON.parse(payload.body);
+    } catch {
+        return;
+    }
 
     const userId = status.userId;   // чей статус пришёл
-    const busy   = status.busy;     // true = занят, false = свободен
+    const busy = status.busy;     // true = занят, false = свободен
 
     /* ---------- 1. REGULAR слышит «я стал свободен» --------------- */
     if (role === 'REGULAR' && userId === nickname && !busy) {
@@ -286,10 +324,10 @@ function sendMessage(event) {
     const text = messageInput.value.trim();
     if (text && stompClient) {
         const chatMessage = {
-            senderId    : nickname,
-            recipientId : selectedUserId,
-            content     : text,
-            timestamp   : new Date()
+            senderId: nickname,
+            recipientId: selectedUserId,
+            content: text,
+            timestamp: new Date()
         };
         stompClient.send("/app/chat", {}, JSON.stringify(chatMessage));
 
@@ -303,7 +341,6 @@ function sendMessage(event) {
     chatArea.scrollTop = chatArea.scrollHeight;
     event.preventDefault();
 }
-
 
 
 /**
@@ -416,6 +453,140 @@ function onLogout() {
     finishChatBtn.classList.add('hidden');
     window.location.reload();
 }
+
+function switchToChatUI() {
+    usernamePage.classList.add('hidden');
+    chatPage.classList.remove('hidden');
+    document.querySelector('#connected-user-nickname').textContent = nickname;
+
+    if (role === 'REGULAR') messageForm.classList.remove('hidden');
+    if (role === 'ENGINEER') findAndDisplayConnectedUsers();
+    if (role === 'ADMIN') adminInit();          // ← новый вызов
+}
+
+/* --- инициализация UI администратора --- */
+async function adminInit() {
+    // 1) прячем лишние поля и показываем кнопку «Удалить»
+    messageForm.classList.add('hidden');
+    finishChatBtn.classList.add('hidden');
+    document.getElementById('kickUser')
+        .classList.remove('hidden-admin');
+
+    // 2) рисуем список онлайн-пользователей
+    await adminReloadOverview();
+
+    // 3) «подглядываем» все новые сообщения
+    stompClient.subscribe('/topic/admin-feed', frame => {
+        const msg = JSON.parse(frame.body);            // новое сообщение
+        const pair = selectedPair();                   // выбранная пара в чате
+        if (!pair) return;
+        const [left, right] = pair;
+        if (
+            (msg.senderId === left && msg.recipientId === right) ||
+            (msg.senderId === right && msg.recipientId === left)
+        ) {
+            displayMessage(msg.senderId, msg.content, msg.id);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+    });
+
+    // 4) ONLINE / OFFLINE
+    stompClient.subscribe('/topic/public', frame => {
+        const u = JSON.parse(frame.body);              // {nickName, role, status}
+        if (u.role === 'ADMIN') return;                // самих админов не показываем
+
+        if (u.status === 'OFFLINE') {                  // ушёл – убираем
+            document.getElementById(u.nickName)?.remove();
+            delete chatBusy[u.nickName];
+            return;
+        }
+        // ONLINE – добавляем/обновляем
+        upsertUserLi(u.nickName, u.role, chatBusy[u.nickName] ?? false);
+    });
+
+    // 5) BUSY / FREE
+    stompClient.subscribe('/topic/user-status', frame => {
+        const s = JSON.parse(frame.body);              // {userId, busy}
+        chatBusy[s.userId] = s.busy;
+        const li = document.getElementById(s.userId);
+        if (li) {
+            li.classList.toggle('busy', s.busy);
+            li.onclick = () => adminSelectUser(s.userId, s.busy);
+        } else {
+            // был OFFLINE, а теперь пришёл BUSY/FREE – перерисуем весь список
+            adminReloadOverview();
+        }
+    });
+}
+
+/* --- получить список занятости с сервера --- */
+async function adminReloadOverview() {
+    const res = await fetch('/admin/overview');
+    const users = await res.json();                 // [{nickName, role, busy}, …]
+    const list = document.getElementById('connectedUsers');
+    list.innerHTML = '';
+
+    users.forEach(u => {
+        chatBusy[u.nickName] = u.busy;              // запоминаем занятость
+        upsertUserLi(u.nickName, u.role, u.busy, list);
+    });
+}
+
+function upsertUserLi(nick, roleLabel, busy, listEl = null) {
+    const list = listEl || document.getElementById('connectedUsers');
+    let li = document.getElementById(nick);
+    if (!li) {                                   // ещё нет – создаём
+        li = document.createElement('li');
+        li.id = nick;
+        li.classList.add('user-item');
+        list.appendChild(li);
+    }
+    li.classList.toggle('busy', busy);           // красная точка
+    li.textContent = `${nick} (${roleLabel})`;
+    li.onclick = () => adminSelectUser(nick, busy);
+}
+/* --- выбор пользователя / инженера --- */
+async function adminSelectUser(nick, busy) {
+    if (!busy) return;           // смотреть можно лишь занятых
+    const pRes = await fetch(`/admin/partner/${nick}`);
+    if (!pRes.ok) return;
+    const partner = await pRes.text();
+
+    chatArea.innerHTML = '';
+    /* сохраняем пару в data-* чтобы потом фильтровать входящие */
+    chatArea.dataset.left = nick;
+    chatArea.dataset.right = partner;
+
+    const history = await fetch(`/messages/${nick}/${partner}`)
+        .then(r => r.json());
+    history.forEach(m => displayMessage(m.senderId, m.content, m.id));
+    chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+/* helper – какие две стороны сейчас выбраны */
+function selectedPair() {
+    const l = chatArea.dataset.left;
+    const r = chatArea.dataset.right;
+    return l && r ? [l, r] : null;
+}
+
+/* --- «Кик» свободного пользователя --- */
+async function kickSelected() {
+    const sel = document.querySelector('.user-item.active');
+    if (!sel) return;
+    const nick = sel.id;
+    const liBusy = sel.classList.contains('busy');
+    if (liBusy) {
+        alert('Нельзя удалить занятого пользователя');
+        return;
+    }
+    await fetch(`/admin/kick/${nick}`, {method: 'DELETE'});
+    await adminReloadOverview();
+}
+
+/* кнопку «Удалить пользователя» (создайте в html внутри .users-footer) */
+document.getElementById('kickUser')
+    ?.addEventListener('click', kickSelected, true);
 
 // Подписываемся на события формы
 usernameForm.addEventListener('submit', connect, true);

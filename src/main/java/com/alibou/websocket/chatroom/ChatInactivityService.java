@@ -34,13 +34,19 @@ public class ChatInactivityService {
         ScheduledFuture<?> prev = timers.remove(key);
         if (prev != null) prev.cancel(false);
 
-        ScheduledFuture<?> fut = pool.schedule(() -> {
-            log.info("Авто-закрытие пары {} ↔ {} (15 с тишины)", engineerId, userId);
-            chatRoomService.deactivatePair(engineerId, userId);
-            timers.remove(key);
-        }, TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        ScheduledFuture<?> fut = pool.schedule(() ->
+                        onTimeout(engineerId, userId, key),
+                TIMEOUT.toMillis(),
+                TimeUnit.MILLISECONDS);
 
         timers.put(key, fut);
+    }
+
+    /* --- НОВЫЙ приватный обработчик --- */
+    private void onTimeout(String engineerId, String userId, String key) {
+        log.info("Авто-тайм-аут пары {} ↔ {}", engineerId, userId);
+        chatRoomService.handleInactivity(engineerId, userId);   // ← новая логика
+        timers.remove(key);                                     // подчистили map
     }
 
     public void cancel(String engineerId, String userId) {

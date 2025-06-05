@@ -26,6 +26,23 @@ public class ChatRoomService {
     /* добавляем ленивую ссылку, чтобы не создать новый цикл */
     private final @Lazy ChatMessageService messageService;
 
+    public boolean isUserInActiveChat(String nick) {
+        return chatRoomRepository
+                .findAllBySenderIdAndActiveTrue(nick).stream()
+                .anyMatch(ChatRoom::isActive)
+                || chatRoomRepository
+                .findAllByRecipientIdAndActiveTrue(nick).stream()
+                .anyMatch(ChatRoom::isActive);
+    }
+
+    /** Найти собеседника в активном чате (если он ровно один) */
+    public Optional<String> findActivePartner(String nick) {
+        return chatRoomRepository
+                .findAllBySenderIdAndActiveTrue(nick).stream()
+                .findFirst()
+                .map(ChatRoom::getRecipientId);
+    }
+
     public ChatRoomService(ChatRoomRepository chatRoomRepository,
                            OnlineUserStore store,
                            SimpMessagingTemplate messagingTemplate,
@@ -37,7 +54,22 @@ public class ChatRoomService {
         this.inactivity = inactivity;
         this.messageService = messageService;
     }
+    public void handleInactivity(String engineerId, String userId) {
 
+        /* 1. снимаем REGULAR-а из онлайна */
+        store.forceRemove(userId);
+
+        /* 2. сообщаем всем, что он OFFLINE */
+        messagingTemplate.convertAndSend(
+                "/topic/public",
+                new User(userId, Status.OFFLINE, UserRole.REGULAR)
+        );
+
+        /* 3. гасим чат (чтобы engineer увидел пользователя снова) */
+        deactivatePair(engineerId, userId);
+
+        log.info("Пользователь {} вышел по 15-сек. тайм-ауту", userId);
+    }
 
     /**
      * Если createNewRoomIfNotExists = true и нет комнаты,

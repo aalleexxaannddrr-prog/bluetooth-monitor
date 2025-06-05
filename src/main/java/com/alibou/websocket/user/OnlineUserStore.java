@@ -18,7 +18,9 @@ public class OnlineUserStore {
     public boolean addIfAbsent(String nick, String sessionId, User u) {
         return users.putIfAbsent(nick, new Online(sessionId, u)) == null;
     }
-
+    public void forceRemove(String nick) {
+        users.remove(nick);
+    }
     public void remove(String nick, String sessionId) {
         users.computeIfPresent(nick, (n, online) ->
                 online.sessionId.equals(sessionId) ? null : online);

@@ -24,7 +24,11 @@ public class UserService {
         user.setStatus(Status.ONLINE);
         log.info("Пользователь {} ONLINE (роль {})", user.getNickName(), user.getRole());
     }
-
+    public void forceDisconnect(String nick) {
+        store.forceRemove(nick);
+        chatRoomService.deactivateChatsForUser(nick);
+        log.info("Пользователь {} кикнут администратором", nick);
+    }
     /** Пользователь покидает систему (logout или disconnect) */
     public void disconnect(String nick, String sessionId) {
         store.remove(nick, sessionId);

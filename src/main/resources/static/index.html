@@ -3,16 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
     <!-- шрифт -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- основной css -->
     <link rel="stylesheet" href="css/main.css">
 
-    <!-- маленький штрих для стрелки summary -->
+    <!-- внутренние стили: мелкая анимация summary + отметка «занят» + скрытность кнопки kick -->
     <style>
-        details#intro summary{cursor:pointer;font-weight:600;list-style:none}
-        details#intro summary::before{content:"▶";display:inline-block;margin-right:.4rem;transition:.2s transform}
-        details#intro[open] summary::before{transform:rotate(90deg)}
+        details#intro summary            {cursor:pointer;font-weight:600;list-style:none}
+        details#intro summary::before    {content:"▶";display:inline-block;margin-right:.4rem;transition:.2s transform}
+        details#intro[open] summary::before {transform:rotate(90deg)}
+
+        /* красная точка у занятого пользователя */
+        .user-item.busy::before {content:"●";color:#e74c3c;margin-right:.4rem;}
+
+        /* по умолчанию кнопка «Удалить» скрыта, JS уберёт класс для ADMIN */
+        .hidden-admin {display:none;}
     </style>
 
     <title>Демонстрация возможностей</title>
@@ -32,6 +39,7 @@
         <select id="role" required>
             <option value="ENGINEER">Инженер</option>
             <option value="REGULAR">Пользователь</option>
+            <option value="ADMIN">Администратор</option>
         </select>
 
         <button type="submit">Войти</button>
@@ -48,6 +56,8 @@
 
         <footer class="users-footer">
             <span id="connected-user-nickname"></span>
+            <!-- кнопка кика доступна только администратору -->
+            <button id="kickUser" class="hidden-admin">Удалить</button>
             <a class="logout" href="javascript:void(0)" id="logout">Выйти</a>
         </footer>
     </aside>
@@ -71,12 +81,16 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.1.4/sockjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
 <script src="/js/main.js"></script>
+
 <script>
-    /* кнопка «Свернуть описание» */
-    document.querySelector('#hideIntroBtn').onclick = () => {
-        document.getElementById('intro').open = false;
-        window.scroll({top: 0, behavior: 'smooth'});
-    };
+    /* кнопка «Свернуть описание» (необязательный приятный UX-штрих) */
+    document.querySelector('#hideIntroBtn')?.addEventListener('click', () => {
+        const intro = document.getElementById('intro');
+        if (intro) {
+            intro.open = false;
+            window.scroll({top: 0, behavior: 'smooth'});
+        }
+    });
 </script>
 </body>
 </html>

@@ -34,6 +34,7 @@ public class ChatController {
                         savedMsg.getContent()
                 )
         );
+        messagingTemplate.convertAndSend("/topic/admin-feed", savedMsg);
         log.info("Сообщение {} отправлено по /queue/{} ({} → {})",
                 savedMsg.getId(),
                 savedMsg.getRecipientId(),
