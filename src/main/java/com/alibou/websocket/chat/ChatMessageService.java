@@ -34,8 +34,11 @@ public class ChatMessageService {
      *  - REGULAR → ENGINEER — сбрасываем таймер пары (engineer, regular).
      */
     public ChatMessage save(ChatMessage chatMessage) {
+
         String senderId = chatMessage.getSenderId();
         String recipientId = chatMessage.getRecipientId();
+        log.info("➡️ Пришло сообщение: sender={}, recipient={}, content={}",
+                senderId, recipientId, chatMessage.getContent());
 
         if (senderId == null || recipientId == null) {
             log.error("❌ ChatMessage содержит null senderId или recipientId: {}", chatMessage);
@@ -47,7 +50,9 @@ public class ChatMessageService {
 
         User senderUser = senderOpt.orElse(null);
         User recipientUser = recipientOpt.orElse(null);
-
+        log.info("🎭 Роли: senderRole={}, recipientRole={}",
+                senderUser != null ? senderUser.getRole() : "null",
+                recipientUser != null ? recipientUser.getRole() : "null");
         // SELF-CHAT
         if (senderId.equals(recipientId)) {
             chatMessage.setChatId(senderId + "_" + recipientId);
