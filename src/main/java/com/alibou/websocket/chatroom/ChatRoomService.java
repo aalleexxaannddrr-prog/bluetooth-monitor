@@ -121,6 +121,9 @@ public class ChatRoomService {
      * Создание chatId и сохранение записей в БД.
      */
     private String createChatId(String senderId, String recipientId) {
+        List<ChatRoom> oldRooms = chatRoomRepository.findAllBySenderIdAndRecipientId(senderId, recipientId);
+        oldRooms.addAll(chatRoomRepository.findAllBySenderIdAndRecipientId(recipientId, senderId));
+        chatRoomRepository.deleteAll(oldRooms);
         String chatId = String.format("%s_%s", senderId, recipientId);
 
         // ===== SELF-CHAT =====
@@ -198,7 +201,9 @@ public class ChatRoomService {
 
     public String activateChat(String engineerId, String userId) {
         ChatRoom room = chatRoomRepository
-                .findBySenderIdAndRecipientId(engineerId, userId)
+                .findAllBySenderIdAndRecipientId(engineerId, userId)
+                .stream()
+                .findFirst()
                 .orElse(null);
 
         boolean stateChanged = false;
