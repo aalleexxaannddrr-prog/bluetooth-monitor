@@ -123,8 +123,9 @@ public class ChatRoomService {
     private String createChatId(String senderId, String recipientId) {
         String chatId = String.format("%s_%s", senderId, recipientId);
 
-        /* ====== SELF-CHAT: создаём только одну запись с active=false ===== */
+        // ===== SELF-CHAT =====
         if (senderId.equals(recipientId)) {
+            deleteSelfChatRoom(senderId); // удаляем старый self-chat, если был
             ChatRoom room = ChatRoom.builder()
                     .chatId(chatId)
                     .senderId(senderId)
@@ -135,7 +136,7 @@ public class ChatRoomService {
             return chatId;
         }
 
-        // В обычном (engineer ↔ regular) сценарии active = true
+        // ===== ПАРНЫЙ ЧАТ engineer ↔ regular =====
         boolean activePair = true;
 
         ChatRoom senderRecipient = ChatRoom.builder()
@@ -158,6 +159,7 @@ public class ChatRoomService {
         log.info("Создана новая комната {} ({} ↔ {})", chatId, senderId, recipientId);
         return chatId;
     }
+
 
     public boolean isUserInActiveChatWithEngineer(String userId) {
         List<ChatRoom> allActiveRooms = new ArrayList<>();
@@ -235,7 +237,13 @@ public class ChatRoomService {
 
         return room.getChatId();
     }
-
+    public void deleteSelfChatRoom(String userId) {
+        chatRoomRepository.findBySenderIdAndRecipientId(userId, userId)
+                .ifPresent(room -> {
+                    chatRoomRepository.delete(room);
+                    log.info("Удалён self-chat для {}", userId);
+                });
+    }
     /**
      * Деактивируем пару engineer ↔ user, ставим их «свободными».
      */
@@ -251,7 +259,7 @@ public class ChatRoomService {
             stateChanged = true;
         }
 
-        // user → engineer (зеркальная)
+        // user → engineer
         Optional<ChatRoom> mirror = chatRoomRepository
                 .findBySenderIdAndRecipientId(userId, engineerId);
         if (mirror.isPresent() && mirror.get().isActive()) {
@@ -267,12 +275,23 @@ public class ChatRoomService {
                     new UserBusyStatus(userId, false));
         }
 
-        // Отменяем таймер пары и запускаем «личный» таймер инженера
+        // Отмена таймеров
         inactivity.cancel(engineerId, userId);
 
-        // Чистим историю сообщений
+        // Очистка истории сообщений
         messageService.clearHistory(engineerId, userId);
+
+        // Удаляем обе записи (engineer → user и user → engineer)
+        direct.ifPresent(chatRoomRepository::delete);
+        mirror.ifPresent(chatRoomRepository::delete);
+
+        // Создаём self-chat для REGULAR
+        if (!userId.equals(engineerId)) {
+            createChatId(userId, userId);
+            log.info("Создан self-chat для пользователя {}", userId);
+        }
     }
+
 
     /**
      * При отключении пользователя (или инженера) — переводим все связанные комнаты в неактивные.
