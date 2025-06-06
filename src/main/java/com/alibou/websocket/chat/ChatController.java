@@ -22,9 +22,16 @@ public class ChatController {
 
     @MessageMapping("/chat")
     public void processMessage(@Payload ChatMessage chatMessage) {
-        // Сохраняем в БД
+        if (chatMessage == null ||
+                chatMessage.getSenderId() == null ||
+                chatMessage.getRecipientId() == null ||
+                chatMessage.getContent() == null) {
+            log.error("❌ Получено некорректное сообщение: {}", chatMessage);
+            return;
+        }
+
         ChatMessage savedMsg = chatMessageService.save(chatMessage);
-        // Отправляем на путь /queue/<получатель>
+
         messagingTemplate.convertAndSend(
                 "/queue/" + chatMessage.getRecipientId(),
                 new ChatNotification(
@@ -35,12 +42,14 @@ public class ChatController {
                 )
         );
         messagingTemplate.convertAndSend("/topic/admin-feed", savedMsg);
+
         log.info("Сообщение {} отправлено по /queue/{} ({} → {})",
                 savedMsg.getId(),
                 savedMsg.getRecipientId(),
                 savedMsg.getSenderId(),
                 savedMsg.getRecipientId());
     }
+
 
     @GetMapping("/messages/{senderId}/{recipientId}")
     public ResponseEntity<List<ChatMessage>> findChatMessages(@PathVariable String senderId,

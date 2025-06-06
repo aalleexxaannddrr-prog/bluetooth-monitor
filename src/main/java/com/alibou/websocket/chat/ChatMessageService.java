@@ -37,8 +37,16 @@ public class ChatMessageService {
         String senderId = chatMessage.getSenderId();
         String recipientId = chatMessage.getRecipientId();
 
-        User senderUser = store.get(senderId).orElse(null);
-        User recipientUser = store.get(recipientId).orElse(null);
+        if (senderId == null || recipientId == null) {
+            log.error("❌ ChatMessage содержит null senderId или recipientId: {}", chatMessage);
+            throw new IllegalArgumentException("senderId и recipientId не могут быть null");
+        }
+
+        Optional<User> senderOpt = store.get(senderId);
+        Optional<User> recipientOpt = store.get(recipientId);
+
+        User senderUser = senderOpt.orElse(null);
+        User recipientUser = recipientOpt.orElse(null);
 
         // SELF-CHAT
         if (senderId.equals(recipientId)) {
@@ -46,43 +54,40 @@ public class ChatMessageService {
 
             if (senderUser != null && senderUser.getRole() == UserRole.REGULAR) {
                 inactivity.cancelRegular(senderId);
-                inactivity.touchRegular(senderId);  // ← запустить новый таймер
+                inactivity.touchRegular(senderId);
             }
 
             if (senderUser != null && senderUser.getRole() == UserRole.ENGINEER) {
-                inactivity.cancelEngineer(senderId); // ← только отменить, запуск не нужен
+                inactivity.cancelEngineer(senderId);
             }
+
         } else {
-            // Создание или получение чата
             String cid = chatRoomService
                     .getChatRoomId(senderId, recipientId, true)
-                    .orElseThrow();
+                    .orElseThrow(() -> new IllegalStateException("Чат не найден или не может быть создан"));
+
             chatMessage.setChatId(cid);
 
-            // REGULAR → ENGINEER
             if (senderUser != null && recipientUser != null
                     && senderUser.getRole() == UserRole.REGULAR
                     && recipientUser.getRole() == UserRole.ENGINEER) {
-                inactivity.touch(recipientId, senderId); // сбрасываем таймер engineer-user
-                inactivity.touchRegular(senderId);       // ← добавляем: ставим личный таймер REGULAR-а
+                inactivity.touch(recipientId, senderId);
+                inactivity.touchRegular(senderId);
             }
-
-            // ENGINEER → REGULAR — ничего не делаем
         }
 
-        // ID + timestamp
         chatMessage.setId(seq.getAndIncrement());
         chatMessage.setTimestamp(new Date());
 
         chats.computeIfAbsent(chatMessage.getChatId(),
-                        k -> new CopyOnWriteArrayList<>())
-                .add(chatMessage);
+                k -> new CopyOnWriteArrayList<>()).add(chatMessage);
 
         log.info("Сообщение {} сохранено в памяти ({} → {})",
                 chatMessage.getId(), senderId, recipientId);
 
         return chatMessage;
     }
+
 
 
     /** Вернуть историю (может быть пустая) */
