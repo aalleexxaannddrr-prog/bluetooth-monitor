@@ -37,44 +37,43 @@ public class ChatMessageService {
         String senderId = chatMessage.getSenderId();
         String recipientId = chatMessage.getRecipientId();
 
-        /* ===== ОБРАБОТКА SELF-CHAT: sender == recipient ===== */
+        User senderUser = store.get(senderId).orElse(null);
+        User recipientUser = store.get(recipientId).orElse(null);
+
+        // SELF-CHAT
         if (senderId.equals(recipientId)) {
-            // виртуальный chatId: "<nick>_<nick>"
             chatMessage.setChatId(senderId + "_" + recipientId);
 
-            // если ENGINEER пишет себе → сбрасываем таймер инженера:
-            User senderUser = store.get(senderId).orElse(null);
-            if (senderUser != null && senderUser.getRole() == UserRole.ENGINEER) {
-                inactivity.cancelEngineer(senderId);
-            }
-
-            // если REGULAR пишет себе → сбрасываем «личный» таймер REGULAR:
             if (senderUser != null && senderUser.getRole() == UserRole.REGULAR) {
                 inactivity.cancelRegular(senderId);
+                inactivity.touchRegular(senderId);  // ← запустить новый таймер
             }
-        }
-        else {
-            // В обычном случае (двое разных) получаем или создаём комнату
+
+            if (senderUser != null && senderUser.getRole() == UserRole.ENGINEER) {
+                inactivity.cancelEngineer(senderId); // ← только отменить, запуск не нужен
+            }
+        } else {
+            // Создание или получение чата
             String cid = chatRoomService
                     .getChatRoomId(senderId, recipientId, true)
                     .orElseThrow();
             chatMessage.setChatId(cid);
 
-            // Если REGULAR → ENGINEER, то обновляем таймер пары:
-            User senderUser = store.get(senderId).orElse(null);
-            User recipientUser = store.get(recipientId).orElse(null);
+            // REGULAR → ENGINEER
             if (senderUser != null && recipientUser != null
                     && senderUser.getRole() == UserRole.REGULAR
                     && recipientUser.getRole() == UserRole.ENGINEER) {
-                inactivity.touch(recipientId, senderId); // touch(engineer, regular)
+                inactivity.touch(recipientId, senderId); // сбрасываем таймер engineer-user
+                inactivity.touchRegular(senderId);       // ← добавляем: ставим личный таймер REGULAR-а
             }
+
+            // ENGINEER → REGULAR — ничего не делаем
         }
 
-        // Присваиваем ID и время
+        // ID + timestamp
         chatMessage.setId(seq.getAndIncrement());
         chatMessage.setTimestamp(new Date());
 
-        // Добавляем в in-memory список
         chats.computeIfAbsent(chatMessage.getChatId(),
                         k -> new CopyOnWriteArrayList<>())
                 .add(chatMessage);
@@ -84,6 +83,7 @@ public class ChatMessageService {
 
         return chatMessage;
     }
+
 
     /** Вернуть историю (может быть пустая) */
     public List<ChatMessage> findChatMessages(String senderId, String recipientId) {

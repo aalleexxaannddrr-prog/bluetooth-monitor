@@ -78,41 +78,12 @@ public class ChatInactivityService {
         if (fut != null) fut.cancel(false);
     }
 
-    /* ====================== 2. Методы для «ло́чного инженера» ====================== */
-
-    /**
-     * Запустить (или обновить) «личный» таймер инженера: если инженер не писал НИКОМУ 15 сек, его «выкидывает».
-     */
-    public void touchEngineer(String engineerId) {
-//        ScheduledFuture<?> prev = engineerTimers.remove(engineerId);
-//        if (prev != null) prev.cancel(false);
-//
-//        ScheduledFuture<?> fut = pool.schedule(
-//                () -> onEngineerTimeout(engineerId),
-//                TIMEOUT.toMillis(),
-//                TimeUnit.MILLISECONDS
-//        );
-//        engineerTimers.put(engineerId, fut);
-    }
 
     public void cancelEngineer(String engineerId) {
         ScheduledFuture<?> fut = engineerTimers.remove(engineerId);
         if (fut != null) fut.cancel(false);
     }
 
-    private void onEngineerTimeout(String engineerId) {
-        log.info("Инженер {} отключён из-за бездействия", engineerId);
-        // Удаляем инженера из онлайна
-        store.forceRemove(engineerId);
-        // Оповещаем всех, что инженер ушёл в OFFLINE
-        messaging.convertAndSend(
-                "/topic/public",
-                new User(engineerId, Status.OFFLINE, UserRole.ENGINEER)
-        );
-        // Деактивируем все его чаты
-        chatRoomService.deactivateChatsForUser(engineerId);
-        engineerTimers.remove(engineerId);
-    }
 
     /* ====================== 3. Методы для «ло́чного пользователя» (REGULAR) ====================== */
 

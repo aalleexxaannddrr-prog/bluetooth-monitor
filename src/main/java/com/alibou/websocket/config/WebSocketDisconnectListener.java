@@ -13,7 +13,6 @@ import org.springframework.web.socket.messaging.SessionDisconnectEvent;
 @RequiredArgsConstructor   // ⇒ Lombok сгенерирует конструктор с final-полями
 public class WebSocketDisconnectListener
         implements ApplicationListener<SessionDisconnectEvent> {
-    // ↑ слушаем именно события разрыва STOMP-сессии
 
     private final UserService userService;   // внедряем наш сервис
 

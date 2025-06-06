@@ -33,9 +33,6 @@ public class UserService {
         if (user.getRole() == UserRole.REGULAR) {
             inactivity.touchRegular(user.getNickName());
         }
-        if (user.getRole() == UserRole.ENGINEER) {
-//            inactivity.touchEngineer(user.getNickName());
-        }
         log.info("Пользователь {} ONLINE (роль {})", user.getNickName(), user.getRole());
     }
 

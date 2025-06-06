@@ -269,7 +269,6 @@ public class ChatRoomService {
 
         // Отменяем таймер пары и запускаем «личный» таймер инженера
         inactivity.cancel(engineerId, userId);
-//        inactivity.touchEngineer(engineerId);
 
         // Чистим историю сообщений
         messageService.clearHistory(engineerId, userId);
