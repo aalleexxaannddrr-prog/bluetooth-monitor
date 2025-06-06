@@ -120,15 +120,18 @@ public class ChatRoomService {
     /**
      * Создание chatId и сохранение записей в БД.
      */
+    // Вставка изменений только в нужные места
+
+// 1. 🔁 В createChatId:
     private String createChatId(String senderId, String recipientId) {
+        // Удаляем все существующие комнаты между пользователями
         List<ChatRoom> oldRooms = chatRoomRepository.findAllBySenderIdAndRecipientId(senderId, recipientId);
         oldRooms.addAll(chatRoomRepository.findAllBySenderIdAndRecipientId(recipientId, senderId));
         chatRoomRepository.deleteAll(oldRooms);
+
         String chatId = String.format("%s_%s", senderId, recipientId);
 
-        // ===== SELF-CHAT =====
         if (senderId.equals(recipientId)) {
-            deleteSelfChatRoom(senderId); // удаляем старый self-chat, если был
             ChatRoom room = ChatRoom.builder()
                     .chatId(chatId)
                     .senderId(senderId)
@@ -139,7 +142,6 @@ public class ChatRoomService {
             return chatId;
         }
 
-        // ===== ПАРНЫЙ ЧАТ engineer ↔ regular =====
         boolean activePair = true;
 
         ChatRoom senderRecipient = ChatRoom.builder()
@@ -211,7 +213,9 @@ public class ChatRoomService {
         if (room == null) {
             createChatId(engineerId, userId); // active=true для новой пары
             room = chatRoomRepository
-                    .findBySenderIdAndRecipientId(engineerId, userId)
+                    .findAllBySenderIdAndRecipientId(engineerId, userId)
+                    .stream()
+                    .findFirst()
                     .orElseThrow();
             stateChanged = true;
         } else if (!room.isActive()) {
@@ -220,8 +224,10 @@ public class ChatRoomService {
             stateChanged = true;
         }
 
-        // Зеркальная запись (user → engineer)
-        chatRoomRepository.findBySenderIdAndRecipientId(userId, engineerId)
+        chatRoomRepository
+                .findAllBySenderIdAndRecipientId(userId, engineerId)
+                .stream()
+                .findFirst()
                 .ifPresent(mirror -> {
                     if (!mirror.isActive()) {
                         mirror.setActive(true);
@@ -236,18 +242,10 @@ public class ChatRoomService {
                     new UserBusyStatus(userId, true));
         }
 
-        // Сброс тайм-аута пары + сброс «личного» тайм-аута инженера
         inactivity.touch(engineerId, userId);
         inactivity.cancelEngineer(engineerId);
 
         return room.getChatId();
-    }
-    public void deleteSelfChatRoom(String userId) {
-        chatRoomRepository.findBySenderIdAndRecipientId(userId, userId)
-                .ifPresent(room -> {
-                    chatRoomRepository.delete(room);
-                    log.info("Удалён self-chat для {}", userId);
-                });
     }
     /**
      * Деактивируем пару engineer ↔ user, ставим их «свободными».
@@ -255,22 +253,23 @@ public class ChatRoomService {
     public void deactivatePair(String engineerId, String userId) {
         boolean stateChanged = false;
 
-        // engineer → user
-        Optional<ChatRoom> direct = chatRoomRepository
-                .findBySenderIdAndRecipientId(engineerId, userId);
-        if (direct.isPresent() && direct.get().isActive()) {
-            direct.get().setActive(false);
-            chatRoomRepository.save(direct.get());
-            stateChanged = true;
+        List<ChatRoom> directRooms = chatRoomRepository.findAllBySenderIdAndRecipientId(engineerId, userId);
+        List<ChatRoom> mirrorRooms = chatRoomRepository.findAllBySenderIdAndRecipientId(userId, engineerId);
+
+        for (ChatRoom room : directRooms) {
+            if (room.isActive()) {
+                room.setActive(false);
+                chatRoomRepository.save(room);
+                stateChanged = true;
+            }
         }
 
-        // user → engineer
-        Optional<ChatRoom> mirror = chatRoomRepository
-                .findBySenderIdAndRecipientId(userId, engineerId);
-        if (mirror.isPresent() && mirror.get().isActive()) {
-            mirror.get().setActive(false);
-            chatRoomRepository.save(mirror.get());
-            stateChanged = true;
+        for (ChatRoom room : mirrorRooms) {
+            if (room.isActive()) {
+                room.setActive(false);
+                chatRoomRepository.save(room);
+                stateChanged = true;
+            }
         }
 
         if (stateChanged) {
@@ -280,17 +279,13 @@ public class ChatRoomService {
                     new UserBusyStatus(userId, false));
         }
 
-        // Отмена таймеров
         inactivity.cancel(engineerId, userId);
-
-        // Очистка истории сообщений
         messageService.clearHistory(engineerId, userId);
 
-        // Удаляем обе записи (engineer → user и user → engineer)
-        direct.ifPresent(chatRoomRepository::delete);
-        mirror.ifPresent(chatRoomRepository::delete);
+        // Удаляем все связанные комнаты
+        chatRoomRepository.deleteAll(directRooms);
+        chatRoomRepository.deleteAll(mirrorRooms);
 
-        // Создаём self-chat для REGULAR
         if (!userId.equals(engineerId)) {
             createChatId(userId, userId);
             log.info("Создан self-chat для пользователя {}", userId);

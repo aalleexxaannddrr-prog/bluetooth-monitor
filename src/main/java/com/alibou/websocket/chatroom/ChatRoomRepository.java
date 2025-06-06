@@ -8,6 +8,12 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
     // Старый метод оставляем:
     Optional<ChatRoom> findBySenderIdAndRecipientId(String senderId, String recipientId);
 
+
+
+
+    // Оставим Optional для совместимости, но использовать нужно с осторожностью
+    Optional<ChatRoom> findTopBySenderIdAndRecipientId(String senderId, String recipientId);
+
     // Новое: возвращает список, если вдруг два или больше записей
     List<ChatRoom> findAllBySenderIdAndRecipientId(String senderId, String recipientId);
 
