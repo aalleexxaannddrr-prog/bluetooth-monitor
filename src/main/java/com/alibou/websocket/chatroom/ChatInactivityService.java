@@ -56,7 +56,7 @@ public class ChatInactivityService {
     public void touch(String engineerId, String userId) {
         String key = engineerId + '_' + userId;
         ScheduledFuture<?> prev = pairTimers.remove(key);
-        if (prev != null) prev.cancel(false);
+        if (prev != null) prev.cancel(true);
 
         ScheduledFuture<?> fut = pool.schedule(
                 () -> onTimeoutPair(engineerId, userId, key),
@@ -75,13 +75,13 @@ public class ChatInactivityService {
     public void cancel(String engineerId, String userId) {
         String key = engineerId + '_' + userId;
         ScheduledFuture<?> fut = pairTimers.remove(key);
-        if (fut != null) fut.cancel(false);
+        if (fut != null) fut.cancel(true);
     }
 
 
     public void cancelEngineer(String engineerId) {
         ScheduledFuture<?> fut = engineerTimers.remove(engineerId);
-        if (fut != null) fut.cancel(false);
+        if (fut != null) fut.cancel(true);
     }
 
 
@@ -93,7 +93,7 @@ public class ChatInactivityService {
      */
     public void touchRegular(String userId) {
         ScheduledFuture<?> prev = regularTimers.remove(userId);
-        if (prev != null) prev.cancel(false);
+        if (prev != null) prev.cancel(true);
 
         ScheduledFuture<?> fut = pool.schedule(
                 () -> onRegularTimeout(userId),
@@ -108,7 +108,7 @@ public class ChatInactivityService {
      */
     public void cancelRegular(String userId) {
         ScheduledFuture<?> fut = regularTimers.remove(userId);
-        if (fut != null) fut.cancel(false);
+        if (fut != null) fut.cancel(true);
     }
 
     private void onRegularTimeout(String userId) {

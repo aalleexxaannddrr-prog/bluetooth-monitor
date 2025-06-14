@@ -80,41 +80,35 @@ public class ChatRoomService {
      * Если createNewRoomIfNotExists = true и нет комнаты,
      * создаёт её (если нужно), предварительно проверяя «занятость».
      */
-    public Optional<String> getChatRoomId(
-            String senderId,
-            String recipientId,
-            boolean createNewRoomIfNotExists
-    ) {
-        /* ====== СПЕЦИАЛЬНАЯ ОБРАБОТКА SELF-CHAT (sender == recipient) ===== */
+    public Optional<String> getChatRoomId(String senderId,
+                                          String recipientId,
+                                          boolean createIfMissing) {
+
+        /* ---------- self-chat ---------- */
         if (senderId.equals(recipientId)) {
-            // В self-chat не создаём две записи, просто возвращаем виртуальный chatId
-            String virtualChatId = senderId + "_" + recipientId;
-            return Optional.of(virtualChatId);
+            return Optional.of(senderId + "_" + recipientId);
         }
 
-        // 1. Ищем уже существующие комнаты (может оказаться более одной, если дубли не убрали):
-        List<ChatRoom> existing = chatRoomRepository
-                .findAllBySenderIdAndRecipientId(senderId, recipientId);
+        String cid = pairId(senderId, recipientId);   //  A_B  либо  B_A
 
-        if (!existing.isEmpty()) {
-            // Если хотя бы одна запись есть — возвращаем chatId первой
-            return Optional.of(existing.get(0).getChatId());
-        }
+        /* 1) уже есть запись? */
+        Optional<ChatRoom> existing = chatRoomRepository.findByChatId(cid);
+        if (existing.isPresent()) return Optional.of(cid);
 
-        // Если нет комнаты и не нужно её создавать — возвращаем empty
-        if (!createNewRoomIfNotExists) {
-            return Optional.empty();
-        }
+        /* 2) нет и не надо создавать? */
+        if (!createIfMissing) return Optional.empty();
 
-        // 2. Проверяем, не занят ли user другим инженером:
-        if (isUserEngineerAndRegularBusy(senderId, recipientId)) {
-            log.warn("Не удалось создать чат: пользователь {} уже занят", recipientId);
-            throw new RuntimeException("Пользователь уже занят другим инженером!");
-        }
+        /* 3) создаём две зеркальные записи */
+        ChatRoom r1 = ChatRoom.builder()
+                .chatId(cid).senderId(senderId)
+                .recipientId(recipientId).active(true).build();
+        ChatRoom r2 = ChatRoom.builder()
+                .chatId(cid).senderId(recipientId)
+                .recipientId(senderId).active(true).build();
 
-        // 3. Всё нормально — создаём новую комнату
-        String newChatId = createChatId(senderId, recipientId);
-        return Optional.of(newChatId);
+        chatRoomRepository.save(r1);
+        chatRoomRepository.save(r2);
+        return Optional.of(cid);
     }
 
     /**
@@ -123,45 +117,26 @@ public class ChatRoomService {
     // Вставка изменений только в нужные места
 
 // 1. 🔁 В createChatId:
-    private String createChatId(String senderId, String recipientId) {
-        // Удаляем все существующие комнаты между пользователями
-        List<ChatRoom> oldRooms = chatRoomRepository.findAllBySenderIdAndRecipientId(senderId, recipientId);
-        oldRooms.addAll(chatRoomRepository.findAllBySenderIdAndRecipientId(recipientId, senderId));
-        chatRoomRepository.deleteAll(oldRooms);
+    private String createChatId(String a, String b) {
 
-        String chatId = String.format("%s_%s", senderId, recipientId);
+        String chatId = pairId(a, b);          // 👈 упорядоченный id
 
-        if (senderId.equals(recipientId)) {
-            ChatRoom room = ChatRoom.builder()
-                    .chatId(chatId)
-                    .senderId(senderId)
-                    .recipientId(recipientId)
-                    .active(false)
-                    .build();
-            chatRoomRepository.save(room);
+        // если запись уже есть – просто вернуть
+        if (chatRoomRepository.findByChatId(chatId).isPresent()) {
             return chatId;
         }
 
-        boolean activePair = true;
+        ChatRoom r1 = ChatRoom.builder()
+                .chatId(chatId).senderId(a)
+                .recipientId(b).active(true).build();
+        ChatRoom r2 = ChatRoom.builder()
+                .chatId(chatId).senderId(b)
+                .recipientId(a).active(true).build();
 
-        ChatRoom senderRecipient = ChatRoom.builder()
-                .chatId(chatId)
-                .senderId(senderId)
-                .recipientId(recipientId)
-                .active(activePair)
-                .build();
+        chatRoomRepository.save(r1);
+        chatRoomRepository.save(r2);
 
-        ChatRoom recipientSender = ChatRoom.builder()
-                .chatId(chatId)
-                .senderId(recipientId)
-                .recipientId(senderId)
-                .active(activePair)
-                .build();
-
-        chatRoomRepository.save(senderRecipient);
-        chatRoomRepository.save(recipientSender);
-
-        log.info("Создана новая комната {} ({} ↔ {})", chatId, senderId, recipientId);
+        log.info("Создана новая комната {} ({} ↔ {})", chatId, a, b);
         return chatId;
     }
 
@@ -202,10 +177,7 @@ public class ChatRoomService {
     }
 
     public String activateChat(String engineerId, String userId) {
-        ChatRoom room = chatRoomRepository
-                .findAllBySenderIdAndRecipientId(engineerId, userId)
-                .stream()
-                .findFirst()
+        ChatRoom room = chatRoomRepository.findByChatId(pairId(engineerId, userId))
                 .orElse(null);
 
         boolean stateChanged = false;
@@ -246,6 +218,10 @@ public class ChatRoomService {
         inactivity.cancelEngineer(engineerId);
 
         return room.getChatId();
+    }
+    /** Одинаковый chatId для одной и той же пары, не важно кто пишет первым */
+    private static String pairId(String a, String b) {
+        return a.compareTo(b) < 0 ? a + "_" + b : b + "_" + a;
     }
     /**
      * Деактивируем пару engineer ↔ user, ставим их «свободными».
