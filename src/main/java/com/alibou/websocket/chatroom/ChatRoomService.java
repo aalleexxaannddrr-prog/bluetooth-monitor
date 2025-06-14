@@ -13,12 +13,14 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @Slf4j
 public class ChatRoomService {
-
+    private static final Map<String, Object> CHAT_LOCKS = new ConcurrentHashMap<>();
     private final ChatRoomRepository chatRoomRepository;
     private final OnlineUserStore store;
     private final SimpMessagingTemplate messagingTemplate;
@@ -76,38 +78,29 @@ public class ChatRoomService {
                 .map(ChatRoom::getRecipientId);
     }
 
-    /**
-     * Если createNewRoomIfNotExists = true и нет комнаты,
-     * создаёт её (если нужно), предварительно проверяя «занятость».
-     */
     public Optional<String> getChatRoomId(String senderId,
                                           String recipientId,
                                           boolean createIfMissing) {
 
-        /* ---------- self-chat ---------- */
+        /* self-chat */
         if (senderId.equals(recipientId)) {
             return Optional.of(senderId + "_" + recipientId);
         }
 
-        String cid = pairId(senderId, recipientId);   //  A_B  либо  B_A
+        String cid  = pairId(senderId, recipientId);            // A_B или B_A
+        if (!chatRoomRepository.findAllByChatId(cid).isEmpty()) // уже есть
+            return Optional.of(cid);
 
-        /* 1) уже есть запись? */
-        Optional<ChatRoom> existing = chatRoomRepository.findByChatId(cid);
-        if (existing.isPresent()) return Optional.of(cid);
+        if (!createIfMissing)                                   // не создавать?
+            return Optional.empty();
 
-        /* 2) нет и не надо создавать? */
-        if (!createIfMissing) return Optional.empty();
-
-        /* 3) создаём две зеркальные записи */
-        ChatRoom r1 = ChatRoom.builder()
-                .chatId(cid).senderId(senderId)
-                .recipientId(recipientId).active(true).build();
-        ChatRoom r2 = ChatRoom.builder()
-                .chatId(cid).senderId(recipientId)
-                .recipientId(senderId).active(true).build();
-
-        chatRoomRepository.save(r1);
-        chatRoomRepository.save(r2);
+        /* создаём комнату под локом → ровно один поток выполнит вставку */
+        Object lock = CHAT_LOCKS.computeIfAbsent(cid, k -> new Object());
+        synchronized (lock) {
+            if (chatRoomRepository.findAllByChatId(cid).isEmpty()) {
+                createChatId(senderId, recipientId);            // две зеркальные записи
+            }
+        }
         return Optional.of(cid);
     }
 
@@ -119,26 +112,27 @@ public class ChatRoomService {
 // 1. 🔁 В createChatId:
     private String createChatId(String a, String b) {
 
-        String chatId = pairId(a, b);          // 👈 упорядоченный id
+        String chatId = pairId(a, b);          // A_B  или  B_A
+        Object lock   = CHAT_LOCKS.computeIfAbsent(chatId, k -> new Object());
 
-        // если запись уже есть – просто вернуть
-        if (chatRoomRepository.findByChatId(chatId).isPresent()) {
+        synchronized (lock) {
+            // если кто-то уже успел вставить – просто выходим
+            if (!chatRoomRepository.findAllByChatId(chatId).isEmpty()) {
+                return chatId;
+            }
+
+            // иначе пишем ДВЕ зеркальные строки
+            ChatRoom r1 = ChatRoom.builder()
+                    .chatId(chatId).senderId(a).recipientId(b).active(true).build();
+            ChatRoom r2 = ChatRoom.builder()
+                    .chatId(chatId).senderId(b).recipientId(a).active(true).build();
+            chatRoomRepository.save(r1);
+            chatRoomRepository.save(r2);
+            log.info("Создана новая комната {} ({} ↔ {})", chatId, a, b);
             return chatId;
         }
-
-        ChatRoom r1 = ChatRoom.builder()
-                .chatId(chatId).senderId(a)
-                .recipientId(b).active(true).build();
-        ChatRoom r2 = ChatRoom.builder()
-                .chatId(chatId).senderId(b)
-                .recipientId(a).active(true).build();
-
-        chatRoomRepository.save(r1);
-        chatRoomRepository.save(r2);
-
-        log.info("Создана новая комната {} ({} ↔ {})", chatId, a, b);
-        return chatId;
     }
+
 
 
     public boolean isUserInActiveChatWithEngineer(String userId) {
@@ -177,47 +171,45 @@ public class ChatRoomService {
     }
 
     public String activateChat(String engineerId, String userId) {
-        ChatRoom room = chatRoomRepository.findByChatId(pairId(engineerId, userId))
+
+        String cid  = pairId(engineerId, userId);                       // общий id
+        ChatRoom room = chatRoomRepository.findAllByChatId(cid)         // «любой первый»
+                .stream()
+                .findFirst()
                 .orElse(null);
 
         boolean stateChanged = false;
 
-        if (room == null) {
-            createChatId(engineerId, userId); // active=true для новой пары
-            room = chatRoomRepository
-                    .findAllBySenderIdAndRecipientId(engineerId, userId)
-                    .stream()
+        if (room == null) {                                             // комнаты нет
+            createChatId(engineerId, userId);
+            room = chatRoomRepository.findAllByChatId(cid).stream()
                     .findFirst()
                     .orElseThrow();
             stateChanged = true;
-        } else if (!room.isActive()) {
+        } else if (!room.isActive()) {                                  // была, но пассивна
             room.setActive(true);
             chatRoomRepository.save(room);
             stateChanged = true;
         }
 
-        chatRoomRepository
-                .findAllBySenderIdAndRecipientId(userId, engineerId)
-                .stream()
-                .findFirst()
-                .ifPresent(mirror -> {
-                    if (!mirror.isActive()) {
-                        mirror.setActive(true);
-                        chatRoomRepository.save(mirror);
-                    }
-                });
+        /* активируем зеркальную запись, если вдруг пассивна */
+        chatRoomRepository.findAllByChatId(cid).forEach(mirror -> {
+            if (!mirror.isActive()) {
+                mirror.setActive(true);
+                chatRoomRepository.save(mirror);
+            }
+        });
 
         if (stateChanged) {
             log.info("Пользователь {} ЗАНЯТ инженером {}", userId, engineerId);
-            messagingTemplate.convertAndSend(
-                    "/topic/user-status",
+            messagingTemplate.convertAndSend("/topic/user-status",
                     new UserBusyStatus(userId, true));
         }
 
         inactivity.touch(engineerId, userId);
         inactivity.cancelEngineer(engineerId);
 
-        return room.getChatId();
+        return room.getChatId();      // == cid
     }
     /** Одинаковый chatId для одной и той же пары, не важно кто пишет первым */
     private static String pairId(String a, String b) {

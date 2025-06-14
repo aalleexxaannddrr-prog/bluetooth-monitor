@@ -5,21 +5,13 @@ import java.util.List;
 import java.util.Optional;
 
 public interface ChatRoomRepository extends JpaRepository<ChatRoom, Long> {
-    // Старый метод оставляем:
-    Optional<ChatRoom> findBySenderIdAndRecipientId(String senderId, String recipientId);
-
-
-
-
-    // Оставим Optional для совместимости, но использовать нужно с осторожностью
-    Optional<ChatRoom> findTopBySenderIdAndRecipientId(String senderId, String recipientId);
 
     // Новое: возвращает список, если вдруг два или больше записей
     List<ChatRoom> findAllBySenderIdAndRecipientId(String senderId, String recipientId);
 
     List<ChatRoom> findAllBySenderId(String senderId);
     List<ChatRoom> findAllByRecipientId(String recipientId);
-    Optional<ChatRoom> findByChatId(String chatId);
+    List<ChatRoom> findAllByChatId(String chatId);
     List<ChatRoom> findAllBySenderIdAndActiveTrue(String senderId);
     List<ChatRoom> findAllByRecipientIdAndActiveTrue(String recipientId);
 }
