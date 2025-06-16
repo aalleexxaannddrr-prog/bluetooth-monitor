@@ -5,6 +5,7 @@ import com.alibou.websocket.user.Status;
 import com.alibou.websocket.user.User;
 import com.alibou.websocket.user.UserRole;
 import jakarta.annotation.PreDestroy;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -12,121 +13,147 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * Финальная версия: один watchdog-поток сканирует дедлайны,
+ * никаких ScheduledFuture и гонок cancel→run.
+ */
 @Service
 @Slf4j
+@RequiredArgsConstructor(onConstructor_ = {@Lazy})
 public class ChatInactivityService {
-    private final ChatRoomService chatRoomService;
-    private final OnlineUserStore store;
+
+    /* ===== инфраструктура и настройки ===== */
+
+    private static final Duration TIMEOUT = Duration.ofSeconds(20);
+
+    private final ChatRoomService       chatRoomService;
+    private final OnlineUserStore       store;
     private final SimpMessagingTemplate messaging;
-    private static final Duration TIMEOUT = Duration.ofSeconds(15);
 
-    private final ScheduledExecutorService pool = Executors.newScheduledThreadPool(1);
+    /** «Часовой» для всех тайм-аутов */
+    private final DebouncedTimeouts watchdog = new DebouncedTimeouts();
 
-    // Таймеры «пары» (engineer↔regular):
-    private final Map<String, ScheduledFuture<?>> pairTimers = new ConcurrentHashMap<>();
+    /* ==================== 1. Таймер пары engineer ↔ regular ==================== */
 
-    // «Личные» таймеры инженера:
-    private final Map<String, ScheduledFuture<?>> engineerTimers = new ConcurrentHashMap<>();
-
-    // «Личные» таймеры обычного пользователя (REGULAR):
-    private final Map<String, ScheduledFuture<?>> regularTimers = new ConcurrentHashMap<>();
-
-    public ChatInactivityService(
-            @Lazy ChatRoomService chatRoomService,
-            OnlineUserStore store,
-            SimpMessagingTemplate messaging
-    ) {
-        this.chatRoomService = chatRoomService;
-        this.store = store;
-        this.messaging = messaging;
+    public void touch(String engineerId, String userId) {
+        String key = "pair:" + engineerId + '_' + userId;
+        watchdog.touch(key, TIMEOUT,
+                () -> onTimeoutPair(engineerId, userId, key));
     }
 
-    /* ====================== 1. Методы для пары (engineer↔user) ====================== */
-
-    /**
-     * Запустить (или обновить) таймер пары: если REGULAR не получил «касание» от engineer в течение 15 сек,
-     * то REGULAR «выкидывается» из системы.
-     */
-    public void touch(String engineerId, String userId) {
-        String key = engineerId + '_' + userId;
-        ScheduledFuture<?> prev = pairTimers.remove(key);
-        if (prev != null) prev.cancel(true);
-
-        ScheduledFuture<?> fut = pool.schedule(
-                () -> onTimeoutPair(engineerId, userId, key),
-                TIMEOUT.toMillis(),
-                TimeUnit.MILLISECONDS
-        );
-        pairTimers.put(key, fut);
+    public void cancel(String engineerId, String userId) {
+        watchdog.cancel("pair:" + engineerId + '_' + userId);
     }
 
     private void onTimeoutPair(String engineerId, String userId, String key) {
         log.info("Авто-тайм-аут пары {} ↔ {}", engineerId, userId);
         chatRoomService.handleInactivity(engineerId, userId);
-        pairTimers.remove(key);
+        watchdog.cancel(key);            // на всякий случай
     }
 
-    public void cancel(String engineerId, String userId) {
-        String key = engineerId + '_' + userId;
-        ScheduledFuture<?> fut = pairTimers.remove(key);
-        if (fut != null) fut.cancel(true);
-    }
+    /* ==================== 2. «Личный» таймер REGULAR ==================== */
 
-
-    public void cancelEngineer(String engineerId) {
-        ScheduledFuture<?> fut = engineerTimers.remove(engineerId);
-        if (fut != null) fut.cancel(true);
-    }
-
-
-    /* ====================== 3. Методы для «ло́чного пользователя» (REGULAR) ====================== */
-
-    /**
-     * Запустить (или обновить) «личный» таймер REGULAR: если REGULAR не писал сам себе или инженеру 15 сек,
-     * его «выкидывает» автоматически.
-     */
     public void touchRegular(String userId) {
-        ScheduledFuture<?> prev = regularTimers.remove(userId);
-        if (prev != null) prev.cancel(true);
-
-        ScheduledFuture<?> fut = pool.schedule(
-                () -> onRegularTimeout(userId),
-                TIMEOUT.toMillis(),
-                TimeUnit.MILLISECONDS
-        );
-        regularTimers.put(userId, fut);
+        watchdog.touch("reg:" + userId, TIMEOUT,
+                () -> onRegularTimeout(userId));
     }
 
-    /**
-     * Отменить «личный» таймер REGULAR (например, когда REGULAR начал писать сам себе).
-     */
     public void cancelRegular(String userId) {
-        ScheduledFuture<?> fut = regularTimers.remove(userId);
-        if (fut != null) fut.cancel(true);
+        watchdog.cancel("reg:" + userId);
     }
 
     private void onRegularTimeout(String userId) {
         log.info("Авто-тайм-аут REGULAR {}", userId);
-        // 1) Удаляем REGULAR-а из онлайна
+
+        // 1) удаляем из онлайна
         store.forceRemove(userId);
-        // 2) Оповещаем всех, что REGULAR ушёл в OFFLINE
+
+        // 2) оповещаем всех
         messaging.convertAndSend(
                 "/topic/public",
                 new User(userId, Status.OFFLINE, UserRole.REGULAR)
         );
-        // 3) Деактивируем любые чаты, связанные с этим REGULAR
+
+        // 3) деактивируем связанные чаты
         chatRoomService.deactivateChatsForUser(userId);
-        regularTimers.remove(userId);
     }
+
+    /* ==================== 3. «Личный» таймер инженера (не нужен) ==================== */
+
+    public void cancelEngineer(String engineerId) {
+        watchdog.cancel("eng:" + engineerId);
+    }
+
+    /* ==================== 4. shutdown ==================== */
 
     @PreDestroy
     public void shutdown() {
-        pool.shutdownNow();
+        watchdog.shutdown();
+    }
+
+    /* ========================================================================== */
+    /*                          Внутренний watchdog-класс                         */
+    /* ========================================================================== */
+
+    private static final class DebouncedTimeouts {
+
+        @RequiredArgsConstructor
+        private static final class Entry {
+            final Runnable onTimeout;
+            final AtomicLong expiresAt = new AtomicLong();
+        }
+
+        private static final long PERIOD_MS = 500;
+
+        private final Map<String, Entry> timers = new ConcurrentHashMap<>();
+
+        private final ScheduledExecutorService guard =
+                Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "chat-timeout-watchdog");
+                    t.setDaemon(true);
+                    return t;
+                });
+
+        DebouncedTimeouts() {
+            guard.scheduleAtFixedRate(this::scan,
+                    PERIOD_MS, PERIOD_MS, TimeUnit.MILLISECONDS);
+        }
+
+        /** «Прикоснуться» к таймеру (создаёт либо обновляет). */
+        void touch(String key, Duration ttl, Runnable onTimeout) {
+            long deadline = System.currentTimeMillis() + ttl.toMillis();
+            timers.compute(key, (k, e) -> {
+                if (e == null) e = new Entry(onTimeout);
+                e.expiresAt.set(deadline);
+                return e;
+            });
+        }
+
+        /** Отменить таймер. */
+        void cancel(String key) {
+            timers.remove(key);
+        }
+
+        /** Обход всех дедлайнов. */
+        private void scan() {
+            long now = System.currentTimeMillis();
+            timers.forEach((key, entry) -> {
+                if (now >= entry.expiresAt.get()) {
+                    timers.remove(key);
+                    try {
+                        entry.onTimeout.run();
+                    } catch (Exception ex) {
+                        log.error("Timeout handler failed", ex);
+                    }
+                }
+            });
+        }
+
+        void shutdown() {
+            guard.shutdownNow();
+        }
     }
 }
