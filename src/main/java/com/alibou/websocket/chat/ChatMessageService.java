@@ -62,9 +62,9 @@ public class ChatMessageService {
         Optional<User> recipientOpt = store.get(recipientId);
         User senderUser    = senderOpt.orElse(null);
         User recipientUser = recipientOpt.orElse(null);
-        log.info("🎭 Роли: senderRole={}, recipientRole={}",
-                senderUser != null ? senderUser.getRole() : "null",
-                recipientUser != null ? recipientUser.getRole() : "null");
+//        log.info("🎭 Роли: senderRole={}, recipientRole={}",
+//                senderUser != null ? senderUser.getRole() : "null",
+//                recipientUser != null ? recipientUser.getRole() : "null");
 
         /* ===================================================================
            1. SELF-CHAT  (idA == idB)

@@ -43,11 +43,11 @@ public class ChatController {
         );
         messagingTemplate.convertAndSend("/topic/admin-feed", savedMsg);
 
-        log.info("Сообщение {} отправлено по /queue/{} ({} → {})",
-                savedMsg.getId(),
-                savedMsg.getRecipientId(),
-                savedMsg.getSenderId(),
-                savedMsg.getRecipientId());
+//        log.info("Сообщение {} отправлено по /queue/{} ({} → {})",
+//                savedMsg.getId(),
+//                savedMsg.getRecipientId(),
+//                savedMsg.getSenderId(),
+//                savedMsg.getRecipientId());
     }
 
 
