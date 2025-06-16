@@ -1,4 +1,3 @@
-
 package com.alibou.websocket.chatroom;
 
 import com.alibou.websocket.chat.ChatMessageService;
@@ -13,20 +12,18 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Полностью in-memory-реализация работы с чат-комнатами.
- * <p>
- * Весь JPA-слой (ChatRoomRepository + @Entity ChatRoom) удалён,
- * поэтому все данные хранятся в опера­тив­ной памяти сервера и
- * обнуляются при рестарте приложения.
+ * Полностью in-memory сервис комнат.
+ * JPA-слой убран: все данные живут в оперативной памяти и
+ * стираются при рестарте приложения.
  */
 @Service
 @Slf4j
 public class ChatRoomService {
 
-    /** thread-safe карта «pairId  →  ChatRoom» */
+    /** thread-safe карта «pairId → ChatRoom» */
     private final Map<String, ChatRoom> rooms = new ConcurrentHashMap<>();
 
-    /* ==== сторонние сервисы ==== */
+    /* ===== сторонние сервисы ===== */
     private final OnlineUserStore        store;
     private final SimpMessagingTemplate  messaging;
     private final ChatInactivityService  inactivity;
@@ -43,7 +40,7 @@ public class ChatRoomService {
     }
 
     /* =======================================================================
-                                   УТИЛИТЫ
+                                   Утилиты
        ======================================================================= */
 
     /** одинаковый id для пары, порядок сторон не важен */
@@ -52,7 +49,7 @@ public class ChatRoomService {
     }
 
     /* =======================================================================
-                           PUBLIC API (используется снаружи)
+                              PUBLIC API
        ======================================================================= */
 
     /**
@@ -63,19 +60,20 @@ public class ChatRoomService {
                                           String recipientId,
                                           boolean createIfMissing) {
 
-        /* self-chat ---------------------------------------- */
+        /* self-chat */
         if (senderId.equals(recipientId)) {
             return Optional.of(senderId + '_' + recipientId);
         }
 
-        /* engineer ↔ regular ------------------------------- */
+        /* engineer ↔ regular */
         String cid = pairId(senderId, recipientId);
 
         if (rooms.containsKey(cid)) return Optional.of(cid);
         if (!createIfMissing)       return Optional.empty();
 
         /* создаём комнату, если ни одна нить ещё не успела */
-        rooms.computeIfAbsent(cid, k -> new ChatRoom(cid, senderId, recipientId, true));
+        rooms.computeIfAbsent(cid,
+                k -> new ChatRoom(cid, senderId, recipientId, true));
         log.info("Создана новая комната {} ({} ↔ {})", cid, senderId, recipientId);
 
         return Optional.of(cid);
@@ -94,13 +92,18 @@ public class ChatRoomService {
                 .filter(r -> r.isActive() &&
                         (r.getSenderId().equals(nick) || r.getRecipientId().equals(nick)))
                 .findFirst()
-                .map(r -> r.getSenderId().equals(nick) ? r.getRecipientId() : r.getSenderId());
+                .map(r -> r.getSenderId().equals(nick)
+                        ? r.getRecipientId() : r.getSenderId());
     }
 
     /** Инженер «берёт» пользователя в работу */
     public String activateChat(String engineerId, String userId) {
-        String cid  = pairId(engineerId, userId);
-        ChatRoom r  = rooms.computeIfAbsent(cid,
+
+        /* ---------- PATCH: удаляем возможный self-chat REGULAR-а ---------- */
+        rooms.remove(userId + '_' + userId);
+
+        String cid = pairId(engineerId, userId);
+        ChatRoom r = rooms.computeIfAbsent(cid,
                 k -> new ChatRoom(cid, engineerId, userId, true));
 
         boolean stateChanged = !r.isActive();
@@ -115,14 +118,14 @@ public class ChatRoomService {
         inactivity.touch(engineerId, userId);
         inactivity.cancelEngineer(engineerId);
 
-        // --- НОВОЕ: мгновенно уведомляем REGULAR-а, что чат активирован ---
+        /* мгновенно уведомляем REGULAR-а, что чат активирован */
         messaging.convertAndSend(
                 "/queue/" + userId,
                 new ChatNotification(
-                        "0",              // id не важен
-                        engineerId,       // от инженера
-                        userId,           // REGULAR-у
-                        ""                // системное пустое сообщение
+                        "0",          // id не важен
+                        engineerId,   // от инженера
+                        userId,       // REGULAR-у
+                        ""            // системное пустое сообщение
                 )
         );
 
@@ -146,9 +149,9 @@ public class ChatRoomService {
 
         inactivity.cancel(engineerId, userId);
         messageService.clearHistory(engineerId, userId);
-        rooms.remove(cid);                       // полностью убираем пару
+        rooms.remove(cid);                    // полностью убираем пару
 
-        /* автоматически создаём self-chat для REGULAR-а */
+        /* создаём self-chat для REGULAR-а, чтобы мог писать себе */
         if (!userId.equals(engineerId)) {
             rooms.putIfAbsent(userId + '_' + userId,
                     new ChatRoom(userId + '_' + userId, userId, userId, false));
@@ -166,7 +169,7 @@ public class ChatRoomService {
     }
 
     /* =======================================================================
-                        СЛУЖЕБНЫЕ МЕТОДЫ, которые нужны другим слоям
+                        Методы, нужные другим слоям
        ======================================================================= */
 
     /** REGULAR «занят» инженером? */
@@ -190,9 +193,10 @@ public class ChatRoomService {
 
     /**
      * Вызывается ChatInactivityService-ом, если REGULAR не получил
-     * «касание» от инженера в течение 15 секунд.
+     * «касание» от инженера в течение 15 с.
      */
     public void handleInactivity(String engineerId, String userId) {
+
         /* 1) удаляем REGULAR-а из онлайна */
         store.forceRemove(userId);
 
