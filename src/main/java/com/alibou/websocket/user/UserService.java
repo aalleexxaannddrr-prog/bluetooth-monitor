@@ -9,6 +9,7 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Service
@@ -16,82 +17,97 @@ import java.util.Optional;
 @Slf4j
 public class UserService {
 
-    private final OnlineUserStore store;
-    private final ChatRoomService chatRoomService;
-    private final ChatInactivityService inactivity;
-    private final SimpMessagingTemplate messagingTemplate;
+    private final OnlineUserStore        store;
+    private final ChatRoomService        chatRoomService;
+    private final ChatInactivityService  inactivity;
+    private final SimpMessagingTemplate  messagingTemplate;
+
+    /* =======================================================================
+                                 LOGIN
+       ======================================================================= */
 
     /** Пользователь заходит */
     public void saveUser(User user, String sessionId) {
-        // 1) пытаемся добавить в OnlineUserStore
+        /* 1) пытаемся добавить в OnlineUserStore */
         if (!store.addIfAbsent(user.getNickName(), sessionId, user)) {
             throw new NickAlreadyOnlineException(
                     "Ник «" + user.getNickName() + "» уже используется");
         }
-        // 2) помечаем ONLINE и запускаем «личный» таймер
+
+        /* 2) помечаем ONLINE и запускаем «личный» таймер */
         user.setStatus(Status.ONLINE);
         if (user.getRole() == UserRole.REGULAR) {
             inactivity.touchRegular(user.getNickName());
         }
-        log.info("Пользователь {} ONLINE (роль {})", user.getNickName(), user.getRole());
+
+        /* 3) логируем */
+        log.info("ONLINE  ⇢ {}@{} role={}", user.getNickName(), sessionId, user.getRole());
     }
+
+    /* =======================================================================
+                                 FORCE KICK
+       ======================================================================= */
 
     public void forceDisconnect(String nick) {
-        // 1) Если есть, узнаём роль, чтобы в OFFLINE послать правильную роль
-        Optional<User> opt = store.get(nick);
-        UserRole role = opt.map(User::getRole).orElse(UserRole.REGULAR);
+        /* 1) определяем роль (если ещё в Store) */
+        Optional<User> opt  = store.get(nick);
+        UserRole       role = opt.map(User::getRole).orElse(UserRole.REGULAR);
 
-        // 2) Отменяем «личный» таймер (engineer или regular)
-        if (role == UserRole.ENGINEER) {
-            inactivity.cancelEngineer(nick);
-        }
-        else if (role == UserRole.REGULAR) {
-            inactivity.cancelRegular(nick);
-        }
+        /* 2) собираем отладочную инфу до отмены таймеров */
+        Map<String, Long> tLeft = inactivity.timersFor(nick);
+        List<String>      rooms = chatRoomService.activeRoomsFor(nick);
 
-        // 3) Удаляем его из OnlineUserStore
+        /* 3) отменяем «личный» таймер */
+        if (role == UserRole.ENGINEER) inactivity.cancelEngineer(nick);
+        else                           inactivity.cancelRegular(nick);
+
+        /* 4) удаляем из OnlineUserStore */
         store.forceRemove(nick);
 
-        // 4) Деактивируем все чаты
+        /* 5) деактивируем все чаты */
         chatRoomService.deactivateChatsForUser(nick);
 
-        // 5) Шлём всем OFFLINE
-        messagingTemplate.convertAndSend(
-                "/topic/public",
-                new User(nick, Status.OFFLINE, role)
-        );
-        log.info("Пользователь {} кикнут администратором", nick);
+        /* 6) лог + OFFLINE всем */
+        log.info("OFFLINE ⇢ {}@- role={} timers={} rooms={}", nick, role, tLeft, rooms);
+        messagingTemplate.convertAndSend("/topic/public",
+                new User(nick, Status.OFFLINE, role));
     }
 
-    /** Пользователь покидает систему (logout или автоматический disconnect) */
+    /* =======================================================================
+                               USER DISCONNECT
+       ======================================================================= */
+
+    /** Добровольный logout или SessionDisconnectEvent */
     public void disconnect(String nick, String sessionId) {
-        // 1) Если есть, узнаём роль пользователя
-        Optional<User> opt = store.get(nick);
-        UserRole role = opt.map(User::getRole).orElse(UserRole.REGULAR);
+        Optional<User> opt  = store.get(nick);
+        UserRole       role = opt.map(User::getRole).orElse(UserRole.REGULAR);
 
-        // 2) Отменяем «личный» таймер
-        if (role == UserRole.ENGINEER) {
-            inactivity.cancelEngineer(nick);
-        }
-        else if (role == UserRole.REGULAR) {
-            inactivity.cancelRegular(nick);
-        }
+        /* 1) отладочная инфа (до отмены таймеров) */
+        Map<String, Long> tLeft = inactivity.timersFor(nick);
+        List<String>      rooms = chatRoomService.activeRoomsFor(nick);
 
-        // 3) Удаляем из OnlineUserStore
+        /* 2) отменяем «личный» таймер */
+        if (role == UserRole.ENGINEER) inactivity.cancelEngineer(nick);
+        else                           inactivity.cancelRegular(nick);
+
+        /* 3) удаляем из Store */
         store.remove(nick, sessionId);
 
-        // 4) Деактивируем все чаты, связанные с ним
+        /* 4) деактивируем все его комнаты */
         chatRoomService.deactivateChatsForUser(nick);
 
-        // 5) Шлём всем OFFLINE
-        messagingTemplate.convertAndSend(
-                "/topic/public",
-                new User(nick, Status.OFFLINE, role)
-        );
-        log.info("Пользователь {} OFFLINE (sess={})", nick, sessionId);
+        /* 5) лог + OFFLINE всем */
+        log.info("OFFLINE ⇢ {}@{} role={} timers={} rooms={}",
+                nick, sessionId, role, tLeft, rooms);
+        messagingTemplate.convertAndSend("/topic/public",
+                new User(nick, Status.OFFLINE, role));
     }
 
-    /** Список «свободных» REGULAR-ов (для инженера) */
+    /* =======================================================================
+                           QUERIES ДЛЯ CONTROLLER-ОВ
+       ======================================================================= */
+
+    /** «Свободные» REGULAR-ы (видно инженеру) */
     public List<User> findConnectedUsersForEngineer() {
         return store.all().stream()
                 .filter(u -> u.getStatus() == Status.ONLINE)
@@ -100,7 +116,7 @@ public class UserService {
                 .toList();
     }
 
-    /** Список всех ONLINE, кто не «занят» чатом с инженером */
+    /** Все ONLINE, кто не «занят» чатом с инженером */
     public List<User> findConnectedUsers() {
         return store.all().stream()
                 .filter(u -> u.getStatus() == Status.ONLINE)

@@ -12,13 +12,15 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Финальная версия: один watchdog-поток сканирует дедлайны,
- * никаких ScheduledFuture и гонок cancel→run.
+ * Один watchdog-поток сканирует дедлайны (никаких гонок cancel→run).
  */
 @Service
 @Slf4j
@@ -40,8 +42,7 @@ public class ChatInactivityService {
 
     public void touch(String engineerId, String userId) {
         String key = "pair:" + engineerId + '_' + userId;
-        watchdog.touch(key, TIMEOUT,
-                () -> onTimeoutPair(engineerId, userId, key));
+        watchdog.touch(key, TIMEOUT, () -> onTimeoutPair(engineerId, userId, key));
     }
 
     public void cancel(String engineerId, String userId) {
@@ -49,16 +50,17 @@ public class ChatInactivityService {
     }
 
     private void onTimeoutPair(String engineerId, String userId, String key) {
-        log.info("Авто-тайм-аут пары {} ↔ {}", engineerId, userId);
+        log.info("Авто-тайм-аут пары {} ↔ {}  (left={} ms)",
+                engineerId, userId,
+                remaining(key).orElse(0L));
         chatRoomService.handleInactivity(engineerId, userId);
-        watchdog.cancel(key);            // на всякий случай
+        watchdog.cancel(key);   // на всякий случай
     }
 
     /* ==================== 2. «Личный» таймер REGULAR ==================== */
 
     public void touchRegular(String userId) {
-        watchdog.touch("reg:" + userId, TIMEOUT,
-                () -> onRegularTimeout(userId));
+        watchdog.touch("reg:" + userId, TIMEOUT, () -> onRegularTimeout(userId));
     }
 
     public void cancelRegular(String userId) {
@@ -66,7 +68,8 @@ public class ChatInactivityService {
     }
 
     private void onRegularTimeout(String userId) {
-        log.info("Авто-тайм-аут REGULAR {}", userId);
+        log.info("Авто-тайм-аут REGULAR {} (left={} ms)",
+                userId, remaining("reg:" + userId).orElse(0L));
 
         // 1) удаляем из онлайна
         store.forceRemove(userId);
@@ -94,6 +97,28 @@ public class ChatInactivityService {
         watchdog.shutdown();
     }
 
+    /* ===============================================================
+       ►► HELPERS для отладки ◄◄
+       ============================================================== */
+
+    /** Сколько миллисекунд осталось «жить» таймеру по его ключу. */
+    public Optional<Long> remaining(String key) {
+        DebouncedTimeouts.Entry e = watchdog.peek(key);
+        if (e == null) return Optional.empty();
+        return Optional.of(Math.max(0, e.expiresAt.get() - System.currentTimeMillis()));
+    }
+
+    /** Активные таймеры конкретного пользователя. */
+    public Map<String, Long> timersFor(String nick) {
+        Map<String, Long> out = new LinkedHashMap<>();
+        remaining("reg:" + nick).ifPresent(ms -> out.put("reg", ms));  // личный REGULAR
+        remaining("eng:" + nick).ifPresent(ms -> out.put("eng", ms));  // личный ENGINEER
+        watchdog.keys().stream()                                       // все пары
+                .filter(k -> k.startsWith("pair:") && k.contains(nick))
+                .forEach(k -> remaining(k).ifPresent(ms -> out.put(k, ms)));
+        return out;
+    }
+
     /* ========================================================================== */
     /*                          Внутренний watchdog-класс                         */
     /* ========================================================================== */
@@ -101,8 +126,8 @@ public class ChatInactivityService {
     private static final class DebouncedTimeouts {
 
         @RequiredArgsConstructor
-        private static final class Entry {
-            final Runnable onTimeout;
+        static final class Entry {
+            final Runnable   onTimeout;
             final AtomicLong expiresAt = new AtomicLong();
         }
 
@@ -151,6 +176,10 @@ public class ChatInactivityService {
                 }
             });
         }
+
+        /* =====► мини-геттеры для отладки ◄===== */
+        Entry       peek(String key) { return timers.get(key); }
+        Set<String> keys()           { return timers.keySet(); }
 
         void shutdown() {
             guard.shutdownNow();

@@ -13,8 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Полностью in-memory сервис комнат.
- * JPA-слой убран: все данные живут в оперативной памяти и
- * стираются при рестарте приложения.
+ * Все данные живут в оперативной памяти и стираются при рестарте приложения.
  */
 @Service
 @Slf4j
@@ -24,10 +23,10 @@ public class ChatRoomService {
     private final Map<String, ChatRoom> rooms = new ConcurrentHashMap<>();
 
     /* ===== сторонние сервисы ===== */
-    private final OnlineUserStore        store;
-    private final SimpMessagingTemplate  messaging;
-    private final ChatInactivityService  inactivity;
-    private final ChatMessageService     messageService;
+    private final OnlineUserStore       store;
+    private final SimpMessagingTemplate messaging;
+    private final ChatInactivityService inactivity;
+    private final ChatMessageService    messageService;
 
     public ChatRoomService(OnlineUserStore store,
                            SimpMessagingTemplate messaging,
@@ -94,6 +93,15 @@ public class ChatRoomService {
                 .findFirst()
                 .map(r -> r.getSenderId().equals(nick)
                         ? r.getRecipientId() : r.getSenderId());
+    }
+
+    /** ⇢ **НОВЫЙ**: список ID всех активных комнат пользователя */
+    public List<String> activeRoomsFor(String nick) {
+        return rooms.values().stream()
+                .filter(ChatRoom::isActive)
+                .filter(r -> r.getSenderId().equals(nick) || r.getRecipientId().equals(nick))
+                .map(ChatRoom::getChatId)
+                .toList();
     }
 
     /** Инженер «берёт» пользователя в работу */
